@@ -1,11 +1,11 @@
 {
     "name": "Zomtorio",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "title": "Zomtorio",
     "author": "Martin Howarth",
     "contact": "",
     "homepage": "https://github.com/MartinHowarth/zomtorio",
-    "factorio_version": "0.17",
+    "factorio_version": "1.1",
     "dependencies": ["base >= 0.17"],
     "description": "Biters act like zombies."
 }

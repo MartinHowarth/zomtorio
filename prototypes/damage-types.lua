@@ -1,0 +1,3 @@
+-- S8 — the custom "zombie-melee" damage type. The character's no-ammo attack is
+-- retyped to this (in melee-retype.lua) so upgraded swarm-melee hits are
+-- unambiguous to detect and can be made enemy-only. Empty until S8.

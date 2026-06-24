@@ -1,0 +1,3 @@
+-- S8 — retype the character's tool_attack_result (the no-ammo melee attack) to
+-- the custom "zombie-melee" damage type so swarm-melee hits are detectable.
+-- Empty until S8.

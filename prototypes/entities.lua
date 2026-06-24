@@ -1,0 +1,3 @@
+-- S2 — horde-unit entities: single entities that visually read as a cluster of
+-- zombies (distinct tiers for small vs. large clusters) and stand in for a
+-- population of N. Empty until S2.

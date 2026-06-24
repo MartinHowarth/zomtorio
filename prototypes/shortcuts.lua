@@ -1,0 +1,2 @@
+-- S8 — the double-tap per-player toggle shortcut (like the mech-armour speed
+-- toggle), unlocked by technology. Empty until S8.

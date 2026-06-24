@@ -1,0 +1,3 @@
+-- S7 — configure spoilage on the corpse item: spoil_ticks from the reanimation
+-- timer setting and spoil_to_trigger_result to spawn zombies, gated on the
+-- corpse-reanimation startup setting. Empty until S7.

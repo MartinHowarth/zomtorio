@@ -1,0 +1,3 @@
+-- S7 — the kiln recipe (and, if the single-inserter furnace loading proves
+-- unworkable, a dedicated corpse-kiln building with a lossy 5->2 recipe).
+-- Empty until S7.

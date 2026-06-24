@@ -1,0 +1,3 @@
+-- S8 — melee upgrade technologies: Tier 1 (red science) unlocks swarm multi-kill,
+-- Tier 2 (red+green) strengthens it, and a tech unlocks the double-tap toggle.
+-- Empty until S8.

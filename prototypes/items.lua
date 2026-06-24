@@ -1,0 +1,3 @@
+-- S7 — corpse and kiln-dried-corpse items. The corpse is burnable fuel and
+-- spoils into zombies; the kiln-dried form does not spoil and is worth more fuel
+-- per item. Empty until S7.

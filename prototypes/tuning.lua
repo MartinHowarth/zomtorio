@@ -1,0 +1,4 @@
+-- S10 — dense-swarm tuning of existing base enemies (collision box x0.2, speed
+-- /4, max_health /4, pollution_to_join_attack scaled by the cost-per-zombie
+-- setting, near-infinite pursuit), denser nest output, worms pushed back to a
+-- later evolution. Also the R-BAL one-punch health curve. Empty until S10.

@@ -1,78 +1,94 @@
+-- Control stage: wire engine events to the feature modules. Each module owns its
+-- own behaviour and storage; this file is only the switchboard. Per-surface
+-- guards (Nauvis-only, R-SCOPE-1) live inside the modules that need them.
 
---local pollution = require("libs/pollution")
-local zombies = require("libs/zombies")
+local raw_cost  = require("lib.raw_cost")
+local horde     = require("lib.horde")
+local spawning  = require("lib.spawning")
+local infection = require("lib.infection")
+local contagion = require("lib.contagion")
+local corpses   = require("lib.corpses")
+local melee     = require("lib.melee")
+local night     = require("lib.night")
+local swarm     = require("lib.swarm")
 
+-- Modules with first-time setup. raw_cost runs first: others depend on its cache.
+local INIT_ORDER = { raw_cost, horde, infection, contagion, corpses, melee, night, swarm }
 
-local function init_settings()
-
-    --if global.player == nil then
-    --  for _, player in ipairs(game.connected_players) do
-    --    global.player = player
-    --    break
-    --  end
-    --end
-
-    game.map_settings.enemy_expansion.max_expansion_distance = 20
-    game.map_settings.enemy_expansion.min_base_spacing = 1
-    game.map_settings.enemy_expansion.enemy_building_influence_radius = 1
-    game.map_settings.enemy_expansion.friendly_base_influence_radius = 1
-    --game.map_settings.enemy_expansion.settler_group_min_size = 25
-    --game.map_settings.enemy_expansion.settler_group_max_size = 100
-    game.map_settings.enemy_expansion.min_expansion_cooldown = 2 * 3600
-    game.map_settings.enemy_expansion.max_expansion_cooldown = 4 * 3600
-
-    -- want frequent swarms
-    game.map_settings.unit_group.max_group_gathering_time = 2 * 3600
-    -- Fewer groups than normal, but much larger
-    game.map_settings.unit_group.max_unit_group_size = 500
-    game.map_settings.unit_group.max_gathering_unit_groups = 10
-
-    -- Force the groups to be smaller, so the enemies form a dense swarm
-    game.map_settings.unit_group.max_group_radius = 10
-    game.map_settings.unit_group.min_group_radius = 0
-    game.map_settings.unit_group.max_member_speedup_when_behind = 3.0
-    --settings.unit_group.max_group_slowdown_factor = 1.0
-    --settings.unit_group.max_group_member_fallback_factor = 10
-    game.map_settings.unit_group.member_disown_distance = 50
-
-    game.map_settings.steering.default.radius = 0.1
-    --game.map_settings.steering.default.separation_force = 0
-    --game.map_settings.steering.default.separation_factor = 0.4
-    game.map_settings.steering.moving.radius = 0.1
-    --game.map_settings.steering.moving.separation_force = 0
-    --game.map_settings.steering.moving.separation_factor = 20
-    --game.map_settings.steering.moving.force_unit_fuzzy_goto_behavior = true
-
-    --game.map_settings.path_finder.stale_enemy_with_same_destination_collision_penalty = 0
-    --game.map_settings.path_finder.ignore_moving_enemy_collision_distance = 0
-    --game.map_settings.path_finder.enemy_with_different_destination_collision_penalty = 0
-
+local function on_init()
+  storage.zomtorio = storage.zomtorio or {}
+  for _, m in ipairs(INIT_ORDER) do
+    if m.on_init then m.on_init() end
+  end
 end
 
---
---script.on_event({defines.events.on_tick},
---   function (event)
---     --init_settings()
---       --pollution.check_pollution()
---       --zombies.on_tick(event)
---   end
---)
-
-script.on_event({defines.events.on_entity_died},
-   function (event)
-     zombies.on_eat_building(event)
-   end
-)
-
-
-local function onInit()
-  global.main_surface = game.surfaces['nauvis']
-  global.player = nil
-  global.recipe_cache = {}
-  init_settings()
-  --pollution.init()
-  --zombies.init()
+-- Prototypes/recipes can change across mod updates; recompute derived caches and
+-- re-apply map settings.
+local function on_configuration_changed()
+  storage.zomtorio = storage.zomtorio or {}
+  for _, m in ipairs(INIT_ORDER) do
+    if m.on_init then m.on_init() end
+  end
+  if raw_cost.on_configuration_changed then raw_cost.on_configuration_changed() end
+  if swarm.on_configuration_changed then swarm.on_configuration_changed() end
 end
 
-script.on_init(onInit)
-script.on_configuration_changed(onInit)
+script.on_init(on_init)
+script.on_configuration_changed(on_configuration_changed)
+
+------------------------------------------------------------------- per-tick
+-- One on_tick fan-out; each consumer self-throttles to its own cadence/budget.
+script.on_event(defines.events.on_tick, function(event)
+  infection.on_tick(event)
+  contagion.on_tick(event)
+  night.on_tick(event)
+  swarm.on_tick(event)
+end)
+
+------------------------------------------------------------------- damage
+-- Filters are installed by the modules' stages (S4/S8) to keep this cheap.
+script.on_event(defines.events.on_entity_damaged, function(event)
+  infection.on_entity_damaged(event)
+  horde.on_entity_damaged(event)
+  melee.on_entity_damaged(event)
+end)
+
+------------------------------------------------------------------- death
+script.on_event(defines.events.on_entity_died, function(event)
+  spawning.on_entity_died(event)
+  corpses.on_entity_died(event)
+end)
+
+------------------------------------------------------------------- build/remove
+-- Maintains the contagion mover registry.
+local build_events = {
+  defines.events.on_built_entity,
+  defines.events.on_robot_built_entity,
+  defines.events.script_raised_built,
+  defines.events.script_raised_revive,
+  defines.events.on_space_platform_built_entity,
+}
+for _, e in ipairs(build_events) do
+  script.on_event(e, function(event) contagion.on_built(event) end)
+end
+
+local remove_events = {
+  defines.events.on_player_mined_entity,
+  defines.events.on_robot_mined_entity,
+  defines.events.on_entity_died,
+  defines.events.script_raised_destroy,
+  defines.events.on_space_platform_mined_entity,
+}
+for _, e in ipairs(remove_events) do
+  script.on_event(e, function(event) contagion.on_removed(event) end)
+end
+
+------------------------------------------------------------------- shortcuts
+script.on_event(defines.events.on_lua_shortcut, function(event)
+  melee.on_toggle_shortcut(event)
+end)
+
+------------------------------------------------------------------- settings
+script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
+  swarm.on_runtime_setting_changed(event)
+end)

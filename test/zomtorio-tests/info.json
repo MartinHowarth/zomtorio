@@ -1,0 +1,9 @@
+{
+    "name": "zomtorio-tests",
+    "version": "0.0.1",
+    "title": "Zomtorio Test Harness",
+    "author": "Martin Howarth",
+    "factorio_version": "2.1",
+    "description": "Headless test harness + checked-in test cases for Zomtorio. Loads only in test runs; never shipped.",
+    "dependencies": ["base", "? zomtorio"]
+}

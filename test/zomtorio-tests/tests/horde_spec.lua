@@ -31,7 +31,7 @@ end
 -- Reset both the cap and our storage so each test starts from a known state.
 local function reset(cap)
   set_cap(cap or DEFAULT_CAP)
-  horde.on_init()
+  horde.reset_state()
 end
 
 --- Find the (single) tracked horde unit near a position, by prototype name.
@@ -43,14 +43,15 @@ end
 
 --- Hit a horde unit: apply the real engine damage, then drive the handler on the
 --- module instance whose storage holds the cluster (see header note).
-local function hit(entity, amount, damage_type)
+local function hit(entity, amount, damage_type, final)
   entity.damage(amount, "player", damage_type)
-  -- The handler only reads event.damage_type.name and original_damage_amount,
-  -- so a minimal event table mirrors what the engine would deliver.
+  -- The handler reads damage_type.name and the dealt (final) damage, falling
+  -- back to original. `final` defaults to `amount` (a no-resistance hit).
   horde.on_entity_damaged {
     entity = entity,
     damage_type = { name = damage_type },
     original_damage_amount = amount,
+    final_damage_amount = final or amount,
   }
 end
 
@@ -110,6 +111,38 @@ T.test("an explosive hit multi-kills proportional to damage", function(t)
   hit(cluster, dmg, "explosion")
   t.assert.equal(60 - expected_kills, horde.pop_of(cluster),
     "explosion kills floor(damage/single)")
+end)
+
+-- Multi-kill must count damage DEALT (post-resistance), not the pre-resistance
+-- amount: original would kill 20, but only 5 worth is actually dealt.
+T.test("explosion multi-kill counts damage dealt, not pre-resistance", function(t)
+  reset(0)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  horde.spawn(t.surface, o, 60, "small", "enemy")
+  local cluster = find_cluster(t.surface, o, "small")
+  t.assert.not_nil(cluster, "cluster should exist")
+
+  local single = horde.single_health("small")
+  hit(cluster, single * 20, "explosion", single * 5)
+  t.assert.equal(60 - 5, horde.pop_of(cluster), "kills computed from damage dealt")
+end)
+
+-- A tracked individual dying must free its cap slot (else the effective cap
+-- shrinks over a long game). Exercises horde.on_entity_died's decrement.
+T.test("an individual zombie death frees its cap slot", function(t)
+  reset(DEFAULT_CAP)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  horde.spawn(t.surface, o, 3, "small", "enemy")  -- cap has room -> 3 real biters
+  t.assert.equal(3, horde.active_count(), "3 tracked individuals")
+
+  local biters = t.surface.find_entities_filtered {
+    name = tiers.INDIVIDUAL.small, position = o, radius = 32,
+  }
+  t.assert.at_least(1, #biters, "individuals exist in the world")
+  horde.on_entity_died { entity = biters[1] }
+  t.assert.equal(2, horde.active_count(), "death frees a cap slot")
 end)
 
 -- ---------------------------------------------------------------- cap -> cluster

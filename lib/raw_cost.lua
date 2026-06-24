@@ -215,7 +215,7 @@ end
 --- (rebuilt lazily) so it is not persisted.
 function raw_cost.on_init()
   storage.zomtorio = storage.zomtorio or {}
-  storage.zomtorio.raw_cost = {}
+  storage.zomtorio.raw_cost = storage.zomtorio.raw_cost or {}
 end
 
 --- Prototypes may have changed across a mod update — drop the cache and the

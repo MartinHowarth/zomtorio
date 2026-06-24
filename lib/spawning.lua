@@ -60,11 +60,13 @@ function spawning.on_entity_died(event)
   -- Count = total-raw solid cost, scaled by the horde-size multiplier
   -- (R-DEATH-2 / R-HORDE-7). Fluids don't add to the count (only the tier).
   local solid, oil = raw_cost.for_entity(entity.name)
-  local count = math.floor(solid * (config.horde_size_multiplier() or 1) + 0.5)
-  if count <= 0 then return end  -- non-buildings (trees/rocks) decompose to 0
+  if solid <= 0 then return end  -- non-buildings (trees/rocks) decompose to 0
+  -- A qualifying building always yields at least one zombie, even at a low
+  -- horde-size multiplier that would otherwise round its small cost to zero.
+  local count = math.max(1, math.floor(solid * (config.horde_size_multiplier() or 1) + 0.5))
 
   local tier = tier_for_oil(oil)
-  horde.spawn(entity.surface, entity.position, count, tier, game.forces[util.ENEMY_FORCE])
+  horde.spawn(entity.surface, entity.position, count, tier, util.ENEMY_FORCE)
 end
 
 return spawning

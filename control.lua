@@ -54,10 +54,14 @@ script.on_event(defines.events.on_entity_damaged, function(event)
 end)
 
 ------------------------------------------------------------------- death
+-- The single canonical on_entity_died dispatch. NOTE: on_entity_died must NOT
+-- also appear in remove_events below — a second script.on_event for the same
+-- event id replaces this handler rather than adding to it.
 script.on_event(defines.events.on_entity_died, function(event)
   spawning.on_entity_died(event)
   corpses.on_entity_died(event)
   horde.on_entity_died(event)
+  contagion.on_removed(event)  -- a dead entity also leaves the mover registry
 end)
 
 ------------------------------------------------------------------- build/remove
@@ -73,15 +77,19 @@ for _, e in ipairs(build_events) do
   script.on_event(e, function(event) contagion.on_built(event) end)
 end
 
+-- Non-death removals only (death is handled above so we don't re-register
+-- on_entity_died and clobber that handler).
 local remove_events = {
   defines.events.on_player_mined_entity,
   defines.events.on_robot_mined_entity,
-  defines.events.on_entity_died,
   defines.events.script_raised_destroy,
   defines.events.on_space_platform_mined_entity,
 }
 for _, e in ipairs(remove_events) do
-  script.on_event(e, function(event) contagion.on_removed(event) end)
+  script.on_event(e, function(event)
+    contagion.on_removed(event)
+    horde.on_removed(event)  -- a mined/destroyed individual must free its cap slot
+  end)
 end
 
 ------------------------------------------------------------------- shortcuts

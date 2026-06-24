@@ -46,7 +46,7 @@ end
 
 -- Reset horde storage and pin the cap to 0 so all spawns fold into clusters.
 local function reset()
-  horde.on_init()
+  horde.reset_state()
   horde.set_cap_override(0)
 end
 
@@ -123,6 +123,20 @@ T.test("a gate death spawns no zombies", function(t)
   spawning.on_entity_died { entity = gate, force = game.forces.enemy }
 
   t.assert.equal(0, total_pop(t.surface, pos), "gates never spawn zombies")
+end)
+
+-- An environmental death (no force, no cause) is not enemy-caused and must spawn
+-- nothing — otherwise scripted/neutral demolition would seed zombies.
+T.test("a death with no force or cause spawns no zombies", function(t)
+  reset()
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  local building = t.world.place(t.surface, "iron-chest", o)
+  local pos = building.position
+
+  spawning.on_entity_died { entity = building }
+
+  t.assert.equal(0, total_pop(t.surface, pos), "non-enemy death spawns nothing")
 end)
 
 -- ---------------------------------------------------- oil building -> tier

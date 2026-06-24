@@ -48,11 +48,11 @@ local function state()
   return z
 end
 
+-- Idempotent: only creates missing tables, never wipes live state. control.lua
+-- runs this on BOTH new game and on_configuration_changed, so a mod update must
+-- not orphan the clusters / cap-count already present in an existing save.
 function horde.on_init()
-  storage.zomtorio = storage.zomtorio or {}
-  storage.zomtorio.horde = {}
-  storage.zomtorio.individuals = {}
-  storage.zomtorio.individual_count = 0
+  state()
 end
 
 --------------------------------------------------------------------- helpers
@@ -175,7 +175,10 @@ function horde.on_entity_damaged(event)
   local dtype = event.damage_type and event.damage_type.name
   local kills
   if dtype and MULTI_KILL_TYPES[dtype] then
-    kills = math.max(1, math.floor((event.original_damage_amount or 0) / single))
+    -- Use damage actually DEALT (post-resistance): horde units inherit the
+    -- biter's resistances, so original_damage_amount would over-count kills.
+    local dealt = event.final_damage_amount or event.original_damage_amount or 0
+    kills = math.max(1, math.floor(dealt / single))
   else
     kills = 1
   end
@@ -207,12 +210,11 @@ function horde.on_entity_damaged(event)
   end
 end
 
---- Death bookkeeping. Tracked individuals leave the cap count; a horde unit that
---- died from something we didn't intercept has its record cleared defensively.
-function horde.on_entity_died(event)
-  local entity = event.entity
-  if not (entity and entity.valid) then return end
-  local un = entity.unit_number
+--- Idempotent removal from our bookkeeping. Safe to call from several remove
+--- paths (death, mined, scripted destroy) without double-counting: a
+--- unit_number already forgotten is a no-op. A tracked individual leaves the cap
+--- count; a horde unit has its record cleared.
+local function forget(un)
   if un == nil then return end
   local z = state()
   if z.individuals[un] then
@@ -221,6 +223,19 @@ function horde.on_entity_died(event)
   elseif z.horde[un] then
     z.horde[un] = nil
   end
+end
+
+--- Death bookkeeping.
+function horde.on_entity_died(event)
+  local e = event.entity
+  if e and e.valid then forget(e.unit_number) end
+end
+
+--- Bookkeeping for NON-death removals (mined, scripted destroy, platform mined),
+--- so a tracked individual that vanishes without dying can't leak its cap slot.
+function horde.on_removed(event)
+  local e = event.entity
+  if e and e.valid then forget(e.unit_number) end
 end
 
 --------------------------------------------------------------------- test API
@@ -245,6 +260,16 @@ end
 --- Test-only: pin (or, with nil, release) the cap. See `cap_override` above.
 function horde.set_cap_override(n)
   cap_override = n
+end
+
+--- Test-only: hard-reset all bookkeeping. Production on_init is intentionally
+--- idempotent (preserves live state across a config change), so tests that need
+--- a clean slate between cases call this instead.
+function horde.reset_state()
+  storage.zomtorio = storage.zomtorio or {}
+  storage.zomtorio.horde = {}
+  storage.zomtorio.individuals = {}
+  storage.zomtorio.individual_count = 0
 end
 
 return horde

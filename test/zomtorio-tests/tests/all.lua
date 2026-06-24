@@ -2,3 +2,4 @@
 -- Add new spec files to this list.
 require("tests.smoke_spec")
 require("tests.raw_cost_spec")
+require("tests.horde_spec")

@@ -57,6 +57,7 @@ end)
 script.on_event(defines.events.on_entity_died, function(event)
   spawning.on_entity_died(event)
   corpses.on_entity_died(event)
+  horde.on_entity_died(event)
 end)
 
 ------------------------------------------------------------------- build/remove

@@ -4,22 +4,247 @@
 -- (population kept in storage; health = pop x single-zombie health). This keeps
 -- enormous effective numbers cheap (R-HORDE-2/3).
 --
--- On hit (R-HORDE-4/5): a normal hit kills one zombie's worth; an explosive or
--- upgraded-melee hit kills floor(damage / single-zombie-health). If the dynamic
--- cap has room and a player is near, the cluster bursts into individuals;
--- otherwise it just loses population. Dies at population 0.
+-- On hit (R-HORDE-4/5): a normal hit kills one zombie's worth; an explosive (or,
+-- later, upgraded-melee) hit kills floor(damage / single-zombie-health). If the
+-- dynamic cap has room and a player is near, the cluster bursts into individuals;
+-- otherwise it just loses population. The script alone destroys the unit, at
+-- population 0 — the prototype carries huge health headroom so the engine's own
+-- damage never pre-empts this (see prototypes/entities.lua).
 --
--- spawn() is the single entry point every source routes through (R-HORDE-6 /
--- R-GEN-6): it creates individuals up to the dynamic cap, folding any overflow
--- into higher-population horde units rather than discarding it.
+-- spawn() is the single entry point every zombie source routes through
+-- (R-HORDE-6 / R-GEN-6): it creates individuals up to the dynamic cap, folding
+-- any overflow into higher-population horde units rather than discarding it.
+
+local config = require("lib.config")
+local tiers  = require("lib.tiers")
 
 local horde = {}
 
-function horde.on_init() end
-function horde.on_entity_damaged(event) end
+-- Damage types that multi-kill in a swarm (R-HORDE-5). The S8 "zombie-melee"
+-- damage type joins this set once melee upgrades land.
+local MULTI_KILL_TYPES = { explosion = true }
 
---- Unified spawner. Create `count` zombies of `tier` for `force` near `pos` on
---- `surface`: individuals up to the cap, overflow folded into horde units.
-function horde.spawn(surface, pos, count, tier, force) end
+-- A burst (R-HORDE-4) only triggers when a character is within this radius, so
+-- abstract clusters only "become real" near a player who'd actually see them.
+local BURST_RADIUS = 32
+
+-- Cap the population of a single cluster so absurd counts (e.g. a megabase
+-- building's total-raw) become a handful of dense clusters rather than one
+-- entity claiming an implausible health value. Kept simple: split into clusters
+-- of at most this each.
+local MAX_CLUSTER_POP = 1000
+
+--------------------------------------------------------------------- storage
+-- storage.zomtorio.horde            : unit_number -> { pop, tier }
+-- storage.zomtorio.individuals      : unit_number -> true  (zombies WE spawned)
+-- storage.zomtorio.individual_count : running size of the above (cap accounting)
+
+local function state()
+  storage.zomtorio = storage.zomtorio or {}
+  local z = storage.zomtorio
+  z.horde = z.horde or {}
+  z.individuals = z.individuals or {}
+  z.individual_count = z.individual_count or 0
+  return z
+end
+
+function horde.on_init()
+  storage.zomtorio = storage.zomtorio or {}
+  storage.zomtorio.horde = {}
+  storage.zomtorio.individuals = {}
+  storage.zomtorio.individual_count = 0
+end
+
+--------------------------------------------------------------------- helpers
+
+--- Single-zombie health for a tier, read live from the individual's prototype so
+--- it auto-tracks the S10 health tuning. Falls back to 1 defensively.
+--- (2.1: LuaEntityPrototype.max_health was replaced by get_max_health(quality?).)
+local function single_health(tier)
+  local proto = prototypes.entity[tiers.INDIVIDUAL[tier]]
+  return (proto and proto.get_max_health()) or 1
+end
+
+--- Health a cluster of `pop` should display: tracks population without ever
+--- exceeding the entity's ceiling (so setting it never errors), and stays
+--- positive so the engine doesn't kill the unit between our hits.
+local function pop_health(entity, pop, tier)
+  local h = pop * single_health(tier)
+  local max = entity.max_health  -- 2.1: readable directly off the LuaEntity
+  if h < 1 then h = 1 end
+  if h > max then h = max end
+  return h
+end
+
+-- Optional cap override. Runtime-global settings can only be written by their
+-- owning mod, so the test harness (a separate mod) can't set the cap setting;
+-- this single internal hook lets a test pin the cap deterministically. nil in
+-- normal play -> the live setting is used.
+local cap_override
+
+--- The dynamic individual-zombie cap (R-HORDE-6). Defensive default if unset.
+local function zombie_cap()
+  if cap_override ~= nil then return cap_override end
+  return config.zombie_cap() or 1000
+end
+
+--- Spare capacity for individual zombies before the cap.
+local function cap_room()
+  return math.max(0, zombie_cap() - state().individual_count)
+end
+
+--- True if a character (a stand-in for "a player") is within BURST_RADIUS.
+local function character_near(surface, pos)
+  if not (surface and surface.valid) then return false end
+  local found = surface.find_entities_filtered {
+    type = "character", position = pos, radius = BURST_RADIUS, limit = 1,
+  }
+  return #found > 0
+end
+
+--- Register an individual zombie we created so the cap counts it exactly.
+local function track_individual(entity)
+  local z = state()
+  if entity and entity.valid and not z.individuals[entity.unit_number] then
+    z.individuals[entity.unit_number] = true
+    z.individual_count = z.individual_count + 1
+  end
+end
+
+--- Create one horde-unit entity holding `pop`, record it, size its health.
+local function create_cluster(surface, pos, pop, tier, force)
+  local name = tiers.HORDE[tier]
+  local place = surface.find_non_colliding_position(name, pos, 16, 0.5) or pos
+  local unit = surface.create_entity { name = name, position = place, force = force }
+  if not (unit and unit.valid) then return nil end
+  state().horde[unit.unit_number] = { pop = pop, tier = tier }
+  unit.health = pop_health(unit, pop, tier)
+  return unit
+end
+
+--------------------------------------------------------------------- public
+
+--- Unified spawner (R-HORDE-6 / R-GEN-6). Create `count` zombies of `tier` for
+--- `force` near `pos` on `surface`: individuals up to the dynamic cap, with all
+--- overflow folded into horde unit(s). Never discards zombies.
+function horde.spawn(surface, pos, count, tier, force)
+  count = math.floor(count or 0)
+  if count <= 0 then return end
+  if not (surface and surface.valid) then return end
+  if not tiers.is_valid(tier) then tier = "small" end
+  force = force or "enemy"
+
+  -- 1/2. Real individuals up to the cap.
+  local make_individuals = math.min(count, cap_room())
+  local individual_name = tiers.INDIVIDUAL[tier]
+  local made = 0
+  for _ = 1, make_individuals do
+    local place = surface.find_non_colliding_position(individual_name, pos, 16, 0.5) or pos
+    local biter = surface.create_entity {
+      name = individual_name, position = place, force = force,
+    }
+    if biter and biter.valid then
+      track_individual(biter)
+      made = made + 1
+    end
+  end
+
+  -- 3. Fold the remainder into horde unit(s), splitting so no one cluster holds
+  -- an absurd population. Never discard zombies.
+  local remainder = count - made
+  while remainder > 0 do
+    local pop = math.min(remainder, MAX_CLUSTER_POP)
+    create_cluster(surface, pos, pop, tier, force)
+    remainder = remainder - pop
+  end
+end
+
+--- Handle a hit on one of our horde units (R-HORDE-4/5). Dispatched for ALL
+--- damage right now, so the not-ours early-out is kept cheap.
+function horde.on_entity_damaged(event)
+  local entity = event.entity
+  if not (entity and entity.valid) then return end
+  if tiers.HORDE_TO_TIER[entity.name] == nil then return end  -- not a horde unit
+
+  local z = state()
+  local rec = z.horde[entity.unit_number]
+  if rec == nil then return end  -- untracked horde unit: let it die normally
+  local tier = rec.tier
+
+  local single = single_health(tier)
+  local dtype = event.damage_type and event.damage_type.name
+  local kills
+  if dtype and MULTI_KILL_TYPES[dtype] then
+    kills = math.max(1, math.floor((event.original_damage_amount or 0) / single))
+  else
+    kills = 1
+  end
+
+  local surface, pos, force = entity.surface, entity.position, entity.force
+
+  -- Burst: cap has room AND a player is near -> the cluster becomes real. The
+  -- killed zombies are gone; the survivors spawn as individuals (R-HORDE-4).
+  if cap_room() > 0 and character_near(surface, pos) then
+    local survivors = rec.pop - kills
+    z.horde[entity.unit_number] = nil
+    entity.destroy()
+    if survivors > 0 then
+      horde.spawn(surface, pos, survivors, tier, force)
+    end
+    -- TODO(S7): killed zombies should drop corpses here (unless flame/explosion).
+    return
+  end
+
+  -- Otherwise lose population. The script is the only thing that kills the unit.
+  rec.pop = rec.pop - kills
+  if rec.pop <= 0 then
+    z.horde[entity.unit_number] = nil
+    entity.destroy()
+    -- TODO(S7): killed zombies should drop corpses here (unless flame/explosion).
+  else
+    entity.health = pop_health(entity, rec.pop, tier)
+    -- TODO(S7): the `kills` zombies removed here should drop corpses.
+  end
+end
+
+--- Death bookkeeping. Tracked individuals leave the cap count; a horde unit that
+--- died from something we didn't intercept has its record cleared defensively.
+function horde.on_entity_died(event)
+  local entity = event.entity
+  if not (entity and entity.valid) then return end
+  local un = entity.unit_number
+  if un == nil then return end
+  local z = state()
+  if z.individuals[un] then
+    z.individuals[un] = nil
+    z.individual_count = math.max(0, z.individual_count - 1)
+  elseif z.horde[un] then
+    z.horde[un] = nil
+  end
+end
+
+--------------------------------------------------------------------- test API
+
+--- Number of live individual zombies we've spawned (cap accounting).
+function horde.active_count()
+  return state().individual_count
+end
+
+--- Population a given horde-unit entity stands in for, or nil if not tracked.
+function horde.pop_of(entity)
+  if not (entity and entity.valid and entity.unit_number) then return nil end
+  local rec = state().horde[entity.unit_number]
+  return rec and rec.pop or nil
+end
+
+--- Exposed for tests/other stages that need the live single-zombie health.
+function horde.single_health(tier)
+  return single_health(tier)
+end
+
+--- Test-only: pin (or, with nil, release) the cap. See `cap_override` above.
+function horde.set_cap_override(n)
+  cap_override = n
+end
 
 return horde

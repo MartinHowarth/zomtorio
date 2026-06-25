@@ -36,6 +36,9 @@ kiln.placeable_by = { item = "zomtorio-corpse-kiln", count = 1 }
 -- It takes no fluids; drop the inherited fluid boxes so no pipe connections show.
 kiln.fluid_boxes = nil
 kiln.fluid_boxes_off_when_no_fluid_recipe = nil
+-- The kiln needs no electricity: a void energy source runs it for free (thematically
+-- the burned corpses are the fuel — baked into the lossy 5->2 recipe, R-CORPSE-7).
+kiln.energy_source = { type = "void" }
 
 -- Make it LOOK like a stone furnace (a "corpse kiln") with a small biter lurking in
 -- the bottom-right corner, while remaining an assembling-machine mechanically. Use

@@ -27,6 +27,14 @@ local CLUSTER_OFFSETS = {
 -- Tint each biter in the clump a sickly green so it reads as distinct from a lone biter.
 local CLUSTER_TINT = { r = 0.55, g = 0.85, b = 0.45, a = 1.0 }
 
+-- A cluster's health is pure ONE-SHOT HEADROOM, not a representation of population
+-- (the script owns deaths; pop lives in storage). It just has to exceed the largest
+-- single damage INSTANCE a cluster might take, so the engine can't wipe a whole swarm
+-- in one hit before our 1-per-hit rule runs. 1000 (further buffered by the biter's
+-- inherited resistances) covers normal weapons; explosive/fire multi-kill by rule
+-- anyway. A sane number — 1e6 read as ridiculous on the health bar.
+local CLUSTER_MAX_HEALTH = 1000
+
 --- Turn one biter animation into a clump: replicate its layers once per offset,
 --- shifting (and green-tinting) each copy. Handles the layered or single-animation
 --- shapes a unit's run/attack animation can take.
@@ -63,11 +71,10 @@ for _, tier in ipairs(tiers.ORDER) do
       horde.attack_parameters.animation = clump(horde.attack_parameters.animation)
     end
 
-    -- Prototype health is pure headroom: the script sets `health` to track
-    -- population and is the only thing that destroys the unit (at pop 0). A big
-    -- ceiling stops a single large hit from killing it before the script runs.
-    horde.max_health = math.max(1e6, (source.max_health or 1) * 1000)
-    -- Don't let it heal back toward that (huge) max between hits.
+    -- Health is one-shot headroom only (see CLUSTER_MAX_HEALTH); the script tracks
+    -- population in storage and is the only thing that destroys the unit (at pop 0).
+    horde.max_health = CLUSTER_MAX_HEALTH
+    -- Don't let it heal back up between hits (we keep it pinned at max ourselves).
     horde.healing_per_tick = 0
 
     new_protos[#new_protos + 1] = horde

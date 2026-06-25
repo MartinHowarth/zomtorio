@@ -15,8 +15,9 @@
 -- (R-HORDE-6 / R-GEN-6): it creates individuals up to the dynamic cap, folding
 -- any overflow into higher-population horde units rather than discarding it.
 
-local config = require("lib.config")
-local tiers  = require("lib.tiers")
+local config  = require("lib.config")
+local tiers   = require("lib.tiers")
+local corpses = require("lib.corpses")
 
 local horde = {}
 
@@ -194,20 +195,24 @@ function horde.on_entity_damaged(event)
     if survivors > 0 then
       horde.spawn(surface, pos, survivors, tier, force)
     end
-    -- TODO(S7): killed zombies should drop corpses here (unless flame/explosion).
+    -- The zombies the hit killed drop corpses (skipped for flame/explosion); a
+    -- hit can't kill more than the cluster held.
+    corpses.drop(surface, pos, math.min(kills, rec.pop), dtype)
     return
   end
 
   -- Otherwise lose population. The script is the only thing that kills the unit.
+  -- Corpses dropped = zombies ACTUALLY removed (a hit can't kill more than the
+  -- cluster holds), skipped for flame/explosion (R-CORPSE-4).
+  local removed = math.min(kills, rec.pop)
   rec.pop = rec.pop - kills
   if rec.pop <= 0 then
     z.horde[entity.unit_number] = nil
     entity.destroy()
-    -- TODO(S7): killed zombies should drop corpses here (unless flame/explosion).
   else
     entity.health = pop_health(entity, rec.pop, tier)
-    -- TODO(S7): the `kills` zombies removed here should drop corpses.
   end
+  corpses.drop(surface, pos, removed, dtype)
 end
 
 --- Idempotent removal from our bookkeeping. Safe to call from several remove

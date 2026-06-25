@@ -84,6 +84,23 @@ function infection.on_init()
   player_state()
 end
 
+--------------------------------------------------------------------- listeners
+-- Observers notified whenever the building path newly infects an entity. Used by
+-- contagion (S6) to seed its belt frontier when a belt becomes infected by ANY
+-- means. This is module-local Lua state (not storage): it is re-registered on
+-- every load because contagion.on_init runs on both new-game and config-changed.
+local infect_listeners = {}
+
+--- Register a function fn(entity) called after an entity is newly infected.
+--- Idempotent: registering the SAME fn twice is a no-op, so contagion.on_init
+--- running again on a config change does not double-register.
+function infection.add_infect_listener(fn)
+  for _, f in ipairs(infect_listeners) do
+    if f == fn then return end
+  end
+  infect_listeners[#infect_listeners + 1] = fn
+end
+
 --------------------------------------------------------------------- overrides
 -- Runtime-global settings can only be written by their owning mod, so the test
 -- harness (a separate mod) can't drive them; these single internal hooks let a
@@ -173,6 +190,11 @@ function infection.infect(entity)
   -- never mistaken for "fully repaired" on its first process.
   if entity.get_health_ratio() >= 1 then
     entity.damage(1, enemy_force(), INFECTION_DAMAGE_TYPE)
+  end
+
+  -- Notify observers (contagion seeds its belt frontier from this).
+  for _, fn in ipairs(infect_listeners) do
+    fn(entity)
   end
 end
 

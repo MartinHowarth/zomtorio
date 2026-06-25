@@ -141,6 +141,33 @@ T.test("force_event starts a horde now and survives daylight (debug trigger)", f
   t.assert.is_true(swarm.get_state().active, "forced horde persists through daylight")
 end)
 
+------------------------------------------------------ horde comes from one direction
+
+-- A horde appears from ONE direction, ~10 chunks beyond the factory edge (the
+-- furthest player building), rather than ringing the player (R-GEN-5 follow-up).
+T.test("a forced horde spawns from one direction, ~10 chunks beyond the factory", {
+  function(t)
+    swarm.reset_state()
+    swarm.set_overrides { enabled = true }
+    t.world.clear(t.surface, t.test_origin, 48)
+    t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+    -- a building 20 tiles out stands in for the factory edge
+    t.world.place(t.surface, "stone-wall",
+      { x = t.test_origin.x + 20, y = t.test_origin.y }, { force = "player" })
+    swarm.force_event(1)
+  end,
+  { after = 1, fn = function(t)
+    local st = swarm.get_state()
+    t.assert.not_nil(st.origin, "a single horde origin was chosen")
+    local dx = st.origin.x - t.test_origin.x
+    local dy = st.origin.y - t.test_origin.y
+    local d = math.sqrt(dx * dx + dy * dy)
+    -- furthest building (~20) + 10 chunks (320) = ~340; lower-bounded for slack
+    -- (stray player entities from other cases only push it further out).
+    t.assert.at_least(320, d, "origin is at least ~10 chunks beyond the player")
+  end },
+})
+
 ------------------------------------------------------ active event spawns via horde
 
 T.test("R-GEN-5/6: an active swarm spawns zombies near a player via the unified spawner", {

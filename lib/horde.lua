@@ -162,8 +162,15 @@ local function update_label(rec)
   if rec.label and rec.label.valid then rec.label.text = tostring(rec.pop) end
 end
 
+--- Give a freshly-spawned unit/cluster an AI command (e.g. a horde event's
+--- attack-march toward the factory). pcall-guarded and a no-op for nil.
+local function apply_command(entity, command)
+  if not command then return end
+  pcall(function() entity.commandable.set_command(command) end)
+end
+
 --- Create one horde-unit entity holding `pop`, record it, size its health.
-local function create_cluster(surface, pos, pop, tier, force)
+local function create_cluster(surface, pos, pop, tier, force, command)
   local name = tiers.HORDE[tier]
   local place = surface.find_non_colliding_position(name, pos, 16, 0.5) or pos
   local unit = surface.create_entity { name = name, position = place, force = force }
@@ -172,6 +179,7 @@ local function create_cluster(surface, pos, pop, tier, force)
   rec.label = pop_label(unit, pop)
   state().horde[unit.unit_number] = rec
   unit.health = pop_health(unit, pop, tier)
+  apply_command(unit, command)
   return unit
 end
 
@@ -182,7 +190,7 @@ end
 --- discard. The burst path uses this directly to re-spawn an already-existing
 --- (already-scaled) surviving population — applying the multiplier there too would
 --- scale it twice.
-local function do_spawn(surface, pos, count, tier, force)
+local function do_spawn(surface, pos, count, tier, force, command)
   count = math.floor(count or 0)
   if count <= 0 then return end
   if not (surface and surface.valid) then return end
@@ -200,6 +208,7 @@ local function do_spawn(surface, pos, count, tier, force)
     }
     if biter and biter.valid then
       track_individual(biter)
+      apply_command(biter, command)
       made = made + 1
     end
   end
@@ -209,7 +218,7 @@ local function do_spawn(surface, pos, count, tier, force)
   local remainder = count - made
   while remainder > 0 do
     local pop = math.min(remainder, MAX_CLUSTER_POP)
-    create_cluster(surface, pos, pop, tier, force)
+    create_cluster(surface, pos, pop, tier, force, command)
     remainder = remainder - pop
   end
 end
@@ -220,13 +229,15 @@ end
 --- horde-size multiplier (R-HORDE-7) is applied — so every generation SOURCE
 --- (death cascade, swarm events, night escalation) scales uniformly. Create
 --- `count` zombies of `tier` for `force` near `pos`, capped/clustered by do_spawn.
-function horde.spawn(surface, pos, count, tier, force)
+--- `command` (optional) is an AI command applied to every spawned unit/cluster —
+--- used by horde events to march the swarm at the factory from its spawn point.
+function horde.spawn(surface, pos, count, tier, force, command)
   count = math.floor(count or 0)
   if count <= 0 then return end
   -- max(1,...) so a positive request never rounds away at a low multiplier
   -- (a building destroyed by zombies always yields at least one zombie).
   count = math.max(1, math.floor(count * size_multiplier()))
-  do_spawn(surface, pos, count, tier, force)
+  do_spawn(surface, pos, count, tier, force, command)
 end
 
 --- Spare individual-zombie capacity before the cap (R-HORDE-6). Exposed so other

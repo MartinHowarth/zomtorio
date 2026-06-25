@@ -33,7 +33,10 @@ data:extend({
   {
     type = "technology",
     name = "zomtorio-swarm-melee-2",
-    icon = "__base__/graphics/technology/military-2.png",
+    -- NOTE: base has no "military-2.png"; use military-science-pack (exists in 2.1).
+    -- Headless Factorio ships no graphics, so missing-icon paths only surface in a
+    -- GUI client — see test/check-icons.sh, which validates these against a full install.
+    icon = "__base__/graphics/technology/military-science-pack.png",
     icon_size = 256,
     effects = {},
     prerequisites = { "zomtorio-swarm-melee-1", "logistic-science-pack" },

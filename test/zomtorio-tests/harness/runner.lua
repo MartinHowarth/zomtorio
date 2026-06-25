@@ -101,16 +101,37 @@ local function finish()
 end
 
 ------------------------------------------------------------------- scheduler
+-- Reset the surface to a clean slate: remove EVERY enemy-force entity (units,
+-- spawners, worms — not just units) and any orphan character a previous test left
+-- behind. The mod cranks enemy generation, so leftovers would (a) attack the GUI
+-- player and pause the run, (b) pollute find_entities_filtered, and (c) pile up
+-- and slow the benchmark. The test map is generated with no natural enemy bases
+-- (see run-tests.sh --map-gen-settings); this keeps it clean between tests.
+local function clear_surface(surface)
+  for _, e in pairs(surface.find_entities_filtered { force = "enemy" }) do
+    if e.valid then e.destroy() end
+  end
+  for _, c in pairs(surface.find_entities_filtered { type = "character" }) do
+    if c.valid and c.player == nil then c.destroy() end  -- keep player-controlled
+  end
+end
+
+-- Visual mode has a real player the mod's enemies would otherwise kill (pausing
+-- the run); keep connected players invulnerable for the duration of the tests.
+local function protect_players()
+  for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then p.character.destructible = false end
+  end
+end
+
 local function start_test()
   state.idx = state.idx + 1
   local t = tests[state.idx]
   if t == nil then finish(); return false end
   state.step = 0
   state.failed = nil
-  -- Clear leftover enemy units so stray biters/clusters from a previous test
-  -- can't wander into this test's find_entities_filtered radius. Every test
-  -- builds its own world, so nothing relies on cross-test unit persistence.
-  game.forces["enemy"].kill_all_units()
+  clear_surface(game.surfaces["nauvis"])
+  protect_players()
   state.ctx = {
     assert = A,
     world = world,
@@ -136,7 +157,11 @@ local function tick()
       " helpers=" .. tostring(helpers ~= nil) .. " tests=" .. #tests ..
       " visual=" .. tostring(state.visual))
     game.speed = state.visual and 1 or SPEED
-    game.forces["enemy"].kill_all_units()
+    -- Disable enemy expansion so the mod can't grow new bases mid-run, and clear
+    -- any enemies the map/mod produced before the first test.
+    game.map_settings.enemy_expansion.enabled = false
+    clear_surface(game.surfaces["nauvis"])
+    protect_players()
     if state.visual then game.print("Zomtorio test harness: running " .. #tests .. " tests...") end
   end
 

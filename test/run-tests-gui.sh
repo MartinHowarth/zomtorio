@@ -48,6 +48,10 @@ cat > "$MODS/mod-list.json" <<EOF
 ]}
 EOF
 
+# Copy the no-natural-enemies map-gen settings to the Windows-side work dir (the
+# Windows client can't read the WSL repo path).
+cp "$HERE/map-gen-no-enemies.json" "$WORK/map-gen-no-enemies.json"
+
 cat > "$WORK/config.ini" <<EOF
 [path]
 read-data=$(wslpath -w "$INSTALL/data")
@@ -57,9 +61,11 @@ EOF
 CFG_WIN="$(wslpath -w "$WORK/config.ini")"
 MODS_WIN="$(wslpath -w "$MODS")"
 SAVE_WIN="$(wslpath -w "$SAVE")"
+MAPGEN_WIN="$(wslpath -w "$WORK/map-gen-no-enemies.json")"
 
-echo ">> creating test map (Windows client)..."
-"$EXE" --config "$CFG_WIN" --mod-directory "$MODS_WIN" --create "$SAVE_WIN" 2>&1 | tail -3
+echo ">> creating test map (Windows client; no natural enemy bases)..."
+"$EXE" --config "$CFG_WIN" --mod-directory "$MODS_WIN" \
+       --map-gen-settings "$MAPGEN_WIN" --create "$SAVE_WIN" 2>&1 | tail -3
 
 echo ">> launching GUI (watch the window; camera follows each test)..."
 echo "   Close the Factorio window when done."

@@ -66,8 +66,9 @@ cat > "$MODS/mod-list.json" <<EOF
 ]}
 EOF
 
-echo ">> creating test map..."
+echo ">> creating test map (no natural enemy bases)..."
 "$BIN" --config "$TDATA/config.ini" --mod-directory "$MODS" \
+       --map-gen-settings "$HERE/map-gen-no-enemies.json" \
        --create "$SAVE" >"$LOG" 2>&1 || { echo "map creation failed:"; cat "$LOG"; exit 2; }
 
 echo ">> running tests via benchmark (ticks=$BENCH_TICKS)..."

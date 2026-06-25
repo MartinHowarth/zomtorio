@@ -1,6 +1,6 @@
 -- S6 — infection contagion: spread along the flow of goods (R-CONT).
 --
--- Two vectors, both bounded by a single fixed per-tick work budget K so spread
+-- Three vectors, all bounded by a single fixed per-tick work budget K so spread
 -- can slow but the frame rate never does (R-CONT-7):
 --   * Movers (inserters/loaders/mining drills): a throttled round-robin sweep
 --     over a maintained registry. An actively-transferring mover whose source is
@@ -9,6 +9,9 @@
 --     belt_neighbours on a travel-time timer that is shorter on faster belts.
 --     The frontier is the SET of infected belts pending spread, seeded by an
 --     infection listener (any belt that becomes infected by any means lands here).
+--   * Pipes: an infected pipe (or tank/pump) holding fluid spreads to ALL its
+--     fluid-connected neighbours (no readable flow direction) on a short fixed
+--     timer. A parallel frontier, seeded by the same infection listener.
 --
 -- No self-expiry; cure is repair or death (R-CONT-4) — we simply stop spreading
 -- from anything that is no longer infected/valid. Belts/pipes/inserters are
@@ -32,6 +35,30 @@ local BELT_TYPE_SET = {
   ["splitter"]         = true,
   ["linked-belt"]      = true,
 }
+
+-- Pipe-like fluid conduits whose infection seeds the pipe-spread frontier and which
+-- re-propagate. Limited to the 1x1 pipe entities: connectivity is derived positionally
+-- (pipes connect on orthogonal faces), which is exact for these. (LuaEntity exposes
+-- neither .fluidbox nor .neighbours in 2.1, so we can't read true fluid topology.)
+local PIPE_TYPE_SET = {
+  ["pipe"]           = true,
+  ["pipe-to-ground"] = true,
+}
+
+-- Types an infected pipe infects on each face. Tanks/pumps are infected as terminal
+-- targets (they die from the DoT) but aren't in PIPE_TYPE_SET, so they don't
+-- re-propagate — the fluid chain effectively stops at a tank/pump. Likewise the far
+-- end of a pipe-to-ground (across the underground gap) isn't reached. Acceptable v1
+-- limitations; contiguous pipe runs — the common case — spread fully.
+local PIPE_NEIGHBOUR_TYPES = { "pipe", "pipe-to-ground", "storage-tank", "pump" }
+
+-- The four orthogonal tile offsets a pipe can connect across.
+local PIPE_OFFSETS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+
+-- Pipes have no exposed flow rate, so we can't scale the spread delay by speed the
+-- way belts do (belt_speed). Fluid equalises across a connected segment quickly, so
+-- use a short fixed travel time before an infected pipe spreads to its neighbours.
+local PIPE_DELAY = 15
 
 -- Fixed per-tick work budget (R-CONT-7): at most this many spread-checks total
 -- across BOTH vectors each tick, regardless of how big the world is. Exceeding
@@ -61,6 +88,9 @@ local BELT_RECHECK = 30
 -- storage.zomtorio.contagion.belts        : unit_number -> { entity, spread_at }
 --                                            (the FRONTIER of infected belts)
 -- storage.zomtorio.contagion.belt_cursor  : saved next() key for the belt sweep
+-- storage.zomtorio.contagion.pipes        : unit_number -> { entity, spread_at }
+--                                            (the FRONTIER of infected pipes)
+-- storage.zomtorio.contagion.pipe_cursor  : saved next() key for the pipe sweep
 
 local function state()
   storage.zomtorio = storage.zomtorio or {}
@@ -71,6 +101,8 @@ local function state()
   c.mover_cursor = c.mover_cursor or nil
   c.belts = c.belts or {}
   c.belt_cursor = c.belt_cursor or nil
+  c.pipes = c.pipes or {}
+  c.pipe_cursor = c.pipe_cursor or nil
   return c
 end
 
@@ -91,12 +123,17 @@ end
 --- entry's timer is fine; first-seen sets it).
 local function on_infected(entity)
   if not (entity and entity.valid) then return end
-  if not BELT_TYPE_SET[entity.type] then return end
   local un = entity.unit_number
   if not un then return end
+  local t = entity.type
   local c = state()
-  if c.belts[un] then return end  -- already pending
-  c.belts[un] = { entity = entity, spread_at = game.tick + belt_delay(entity) }
+  if BELT_TYPE_SET[t] then
+    if c.belts[un] then return end  -- already pending
+    c.belts[un] = { entity = entity, spread_at = game.tick + belt_delay(entity) }
+  elseif PIPE_TYPE_SET[t] then
+    if c.pipes[un] then return end
+    c.pipes[un] = { entity = entity, spread_at = game.tick + PIPE_DELAY }
+  end
 end
 
 --- True if `entity` is a registerable mover on the active surface.
@@ -154,6 +191,7 @@ function contagion.on_removed(event)
   local c = state()
   c.movers[un] = nil
   c.belts[un] = nil
+  c.pipes[un] = nil
 end
 
 --------------------------------------------------------------------- mover step
@@ -276,33 +314,62 @@ local function spread_belt_downstream(belt)
   end
 end
 
---- Process up to `count` belts from the frontier cursor. Returns the number
---- examined (charged against the budget).
+--------------------------------------------------------------------- pipe step
+
+--- Does this pipe currently hold any fluid? (Presence gate, the fluid analogue of
+--- belt_has_items.) get_fluid_count() with no name returns the total across the
+--- entity's fluidboxes.
+local function pipe_has_fluid(pipe)
+  return (pipe.get_fluid_count and pipe.get_fluid_count() or 0) > 0
+end
+
+--- Infect every fluid-connected neighbour of `pipe`, in ALL directions (a fluid
+--- network has no readable flow direction). Pipes connect on their four orthogonal
+--- faces, so a point-find on each adjacent tile yields exactly the connected conduit
+--- there — no false diagonal jumps, and multi-tile tanks/pumps occupying a face tile
+--- are caught too. (LuaEntity exposes neither .fluidbox nor .neighbours in 2.1, so we
+--- derive connectivity positionally.)
+local function spread_pipe_all(pipe)
+  local p, surf = pipe.position, pipe.surface
+  for _, off in ipairs(PIPE_OFFSETS) do
+    local found = surf.find_entities_filtered {
+      position = { x = p.x + off[1], y = p.y + off[2] },
+      type = PIPE_NEIGHBOUR_TYPES,
+    }
+    for _, nb in pairs(found) do
+      if nb.valid and nb ~= pipe then infection.infect(nb) end
+    end
+  end
+end
+
+--- Generic conduit-frontier sweep, shared by belts and pipes. Processes up to
+--- `count` entries from a round-robin cursor and returns the number examined
+--- (charged against the budget). `fname`/`cname` are the storage field names of the
+--- frontier table and its saved cursor; `has_contents`, `spread_fn` and `delay_fn`
+--- are the conduit-specific behaviour (presence gate, neighbour-infect, travel time).
 ---
---- An infected belt is a PERSISTENT source while it stays infected (R-CONT-4):
---- after it spreads we re-arm its travel-time timer rather than dropping it, so
---- it keeps infecting belts that are built (or cured-then-reinfected) downstream
---- LATER — not just the neighbours present on the first pass. (Dropping after one
---- spread was a bug: extending an infected line, or a belt that spread before its
---- downstream had items, would never infect the new/late belt.) Re-infecting an
---- already-infected neighbour is an idempotent no-op, and the re-armed timer stops
---- a belt being processed twice in the same sweep. Only invalid or cured belts
---- leave the frontier. Per-tick work stays bounded by the budget (R-CONT-7).
-local function sweep_belts(c, count, now)
-  local belts = c.belts
-  local key = c.belt_cursor
-  -- Saved cursor may point at a belt removed since last tick (mined/destroyed/died
+--- A conduit is a PERSISTENT source while it stays infected (R-CONT-4): after it
+--- spreads we re-arm its travel-time timer rather than dropping it, so it keeps
+--- infecting conduits built (or cured-then-reinfected) downstream LATER, not just the
+--- neighbours present on the first pass. Re-infecting an already-infected neighbour
+--- is an idempotent no-op, and the re-armed timer stops a conduit being processed
+--- twice in one sweep. Only invalid or cured conduits leave the frontier. Per-tick
+--- work stays bounded by the budget (R-CONT-7).
+local function sweep_frontier(c, fname, cname, count, now, has_contents, spread_fn, delay_fn)
+  local frontier = c[fname]
+  local key = c[cname]
+  -- Saved cursor may point at an entry removed since last tick (mined/destroyed/died
   -- via on_removed); next() raises "invalid key to 'next'" on a stale key. Restart
   -- the walk from the top if so.
-  if key ~= nil and belts[key] == nil then key = nil end
+  if key ~= nil and frontier[key] == nil then key = nil end
   local done = 0
-  -- Infecting downstream mutates `belts` (via the on_infected listener), which is
-  -- undefined to do mid-next(); collect the belts to spread and do it after the walk.
+  -- Infecting neighbours mutates `frontier` (via the on_infected listener), which is
+  -- undefined to do mid-next(); collect entries to spread and do it after the walk.
   local to_spread
   while done < count do
-    local un, rec = next(belts, key)
+    local un, rec = next(frontier, key)
     if un == nil then
-      un, rec = next(belts, nil)
+      un, rec = next(frontier, nil)
       if un == nil then break end
     end
     key = un
@@ -315,48 +382,61 @@ local function sweep_belts(c, count, now)
       remove = true                                   -- cured or died (R-CONT-4)
     elseif now < rec.spread_at then
       -- Not yet its travel time; leave it pending.
-    elseif not belt_has_items(e) then
+    elseif not has_contents(e) then
       rec.spread_at = now + BELT_RECHECK              -- empty: re-arm (R-CONT-2)
     else
       to_spread = to_spread or {}
       to_spread[#to_spread + 1] = e
-      rec.spread_at = now + belt_delay(e)             -- spread + re-arm (persistent)
+      rec.spread_at = now + delay_fn(e)               -- spread + re-arm (persistent)
     end
 
     if remove then
-      key = next(belts, un)
-      belts[un] = nil
+      key = next(frontier, un)
+      frontier[un] = nil
     end
 
     done = done + 1
   end
-  c.belt_cursor = key
+  c[cname] = key
 
   if to_spread then
     for _, e in ipairs(to_spread) do
-      if e.valid then spread_belt_downstream(e) end
+      if e.valid then spread_fn(e) end
     end
   end
   return done
 end
 
+local function pipe_delay() return PIPE_DELAY end
+
+local function sweep_belts(c, count, now)
+  return sweep_frontier(c, "belts", "belt_cursor", count, now,
+    belt_has_items, spread_belt_downstream, belt_delay)
+end
+
+local function sweep_pipes(c, count, now)
+  return sweep_frontier(c, "pipes", "pipe_cursor", count, now,
+    pipe_has_fluid, spread_pipe_all, pipe_delay)
+end
+
 --------------------------------------------------------------------- per-tick
 
---- Throttled sweep: split the single budget K between the two vectors (half to
---- movers, the remainder to belts), resuming each from its own round-robin cursor
---- so every entry is eventually visited. Total per-tick work is bounded by K
---- (R-CONT-7) no matter how large the registry/frontier grow.
+--- Throttled sweep: split the single budget K across the three vectors (movers,
+--- belts, pipes), resuming each from its own round-robin cursor so every entry is
+--- eventually visited. Each vector gets up to a third, but unspent budget (an empty
+--- registry/frontier) rolls on to the next vector so nothing is wasted. Total
+--- per-tick work is bounded by K (R-CONT-7) no matter how large they grow.
 function contagion.on_tick(event)
   local c = state()
   local k = budget()
   local now = (event and event.tick) or game.tick
 
-  local mover_budget = math.ceil(k / 2)
-  local spent = sweep_movers(c, mover_budget)
-  -- Give belts the remaining budget (so an empty registry doesn't waste budget).
-  local belt_budget = k - spent
-  if belt_budget > 0 then
-    sweep_belts(c, belt_budget, now)
+  local share = math.ceil(k / 3)
+  local spent = sweep_movers(c, share)
+  spent = spent + sweep_belts(c, math.min(share, k - spent), now)
+  local pipe_budget = k - spent
+  if pipe_budget > 0 then
+    sweep_pipes(c, pipe_budget, now)
   end
 end
 
@@ -368,11 +448,12 @@ function contagion.set_budget_override(n)
   budget_override = n
 end
 
---- Debug/test accessor: sizes of the mover registry and belt frontier (real mod
---- state), for diagnosing where a contagion chain stalls.
+--- Debug/test accessor: sizes of the mover registry and belt/pipe frontiers (real
+--- mod state), for diagnosing where a contagion chain stalls.
 function contagion.debug_counts()
   local c = state()
-  return { movers = table_size(c.movers), belts = table_size(c.belts) }
+  return { movers = table_size(c.movers), belts = table_size(c.belts),
+           pipes = table_size(c.pipes) }
 end
 
 --- Test-only: hard-reset all bookkeeping. Production on_init is idempotent
@@ -382,6 +463,7 @@ function contagion.reset_state()
   storage.zomtorio = storage.zomtorio or {}
   storage.zomtorio.contagion = {
     movers = {}, mover_cursor = nil, belts = {}, belt_cursor = nil,
+    pipes = {}, pipe_cursor = nil,
   }
 end
 

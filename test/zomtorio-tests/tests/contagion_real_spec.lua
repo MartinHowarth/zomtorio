@@ -237,3 +237,52 @@ T.test("REAL: a belt added downstream after infection still gets infected", {
       "belt built downstream AFTER infection got infected (R-CONT-4 persistent source)")
   end },
 })
+
+-- =====================================================================
+-- F. Pipes spread infection through the fluid network, in ALL directions, while
+--    they hold fluid (presence-gated) — the fluid analogue of belt spread.
+-- =====================================================================
+T.test("REAL: an infected pipe holding fluid spreads to connected pipes", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 12)
+    set_ticks(36000)  -- keep the segment alive while it propagates
+    t.pipes = {}
+    for i = 0, 2 do
+      t.pipes[i + 1] = t.world.place(t.surface, "pipe", { x = o.x + i, y = o.y })
+    end
+    -- Fill the (now connected) segment so the presence gate is open.
+    for _, p in ipairs(t.pipes) do p.insert_fluid { name = "water", amount = 100 } end
+    bite(t.pipes[1])
+  end,
+  { after = 3, fn = function(t)
+    t.assert.is_true(is_infected(t.pipes[1]), "pipe1 infected by the bite")
+  end },
+  -- PIPE_DELAY is ~15 ticks/hop; two hops + sweep cadence settle well inside this.
+  { after = 150, fn = function(t)
+    t.assert.is_true(is_infected(t.pipes[2]), "pipe2 infected (fluid spread)")
+    t.assert.is_true(is_infected(t.pipes[3]),
+      "pipe3 infected (fluid spread reached the far end, all directions)")
+  end },
+})
+
+-- =====================================================================
+-- G. Negative: an infected pipe with NO fluid must not spread (presence gate).
+-- =====================================================================
+T.test("REAL: an empty (fluidless) infected pipe does not spread", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 12)
+    set_ticks(36000)
+    t.p1 = t.world.place(t.surface, "pipe", { x = o.x, y = o.y })
+    t.p2 = t.world.place(t.surface, "pipe", { x = o.x + 1, y = o.y })  -- connected, empty
+    bite(t.p1)
+  end,
+  { after = 3, fn = function(t)
+    t.assert.is_true(is_infected(t.p1), "empty pipe infected by the bite")
+  end },
+  { after = 200, fn = function(t)
+    t.assert.is_false(is_infected(t.p2),
+      "an empty (fluidless) infected pipe must NOT spread to its neighbour")
+  end },
+})

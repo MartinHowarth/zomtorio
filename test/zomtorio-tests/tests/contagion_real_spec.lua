@@ -398,3 +398,51 @@ T.test("REAL: a repaired entity is briefly immune to re-infection, then re-infec
       "after the immunity window expires, the entity is re-infectable")
   end },
 })
+
+-- =====================================================================
+-- K. Directional fluid spread: an infected machine spreads DOWNSTREAM (to its
+--    output pipes) but NOT UPSTREAM (back into its input/supply pipes). Uses an oil
+--    refinery, which has clearly directional input (crude) and output (petroleum)
+--    fluidbox connections.
+-- =====================================================================
+T.test("REAL: an infected machine spreads downstream but not into its input pipe", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 18)
+    set_ticks(36000)
+    t.ref = t.world.place(t.surface, "oil-refinery", o, { recipe = "basic-oil-processing" })
+    -- Place a pipe at every input- and output-connection point so we can check both
+    -- directions. target_position is the tile a connecting pipe sits on.
+    t.in_pipes, t.out_pipes = {}, {}
+    for i = 1, 8 do
+      local ok, conns = pcall(t.ref.get_fluid_box_pipe_connections, i)
+      if not ok then break end
+      for _, c in pairs(conns) do
+        local tp = c.target_position
+        if tp then
+          local p = t.world.place(t.surface, "pipe", tp)
+          if p then
+            if c.flow_direction == "input" then t.in_pipes[#t.in_pipes + 1] = p
+            elseif c.flow_direction == "output" then t.out_pipes[#t.out_pipes + 1] = p end
+          end
+        end
+      end
+    end
+    t.ref.insert_fluid { name = "crude-oil", amount = 100 }  -- gives the refinery fluid
+    bite(t.ref)
+  end,
+  { after = 3, fn = function(t)
+    t.assert.at_least(1, #t.in_pipes, "placed at least one input-side pipe")
+    t.assert.at_least(1, #t.out_pipes, "placed at least one output-side pipe")
+    t.assert.is_true(is_infected(t.ref), "refinery infected by the bite")
+  end },
+  { after = 150, fn = function(t)
+    local out_hit = false
+    for _, p in ipairs(t.out_pipes) do if p.valid and is_infected(p) then out_hit = true end end
+    t.assert.is_true(out_hit, "infection flowed DOWNSTREAM to an output pipe")
+    for _, p in ipairs(t.in_pipes) do
+      t.assert.is_false(p.valid and is_infected(p),
+        "infection must NOT flow upstream into the refinery's input pipe")
+    end
+  end },
+})

@@ -342,15 +342,25 @@ end
 --- (machines included) re-enters the pipe frontier via the infection listener
 --- (has_fluidbox), so fluid infection propagates through the whole connected network.
 local function spread_pipe_all(conduit)
-  -- LuaEntity methods are bound closures (dot-style, no explicit self), so pass ONLY
-  -- the fluidbox index — not the entity.
+  -- Spread DOWNSTREAM only. get_fluid_box_pipe_connections(i) gives, per connection,
+  -- a flow_direction ("input" / "output" / "input-output") and the target entity.
+  -- We skip pure "input" connections: spreading through one would push infection
+  -- UPSTREAM, back into what feeds this entity (e.g. from a machine's input port into
+  -- its supply pipe). "output" and "input-output" carry it onward. Plain pipe↔pipe
+  -- connections are all "input-output", so pipe runs stay bidirectional (a pipe has no
+  -- readable flow direction); only directional MACHINE ports gate the spread. This is
+  -- also why a supply pipe still infects the machine it feeds: the pipe's side of that
+  -- connection is "input-output", only the machine's side is "input".
+  -- (LuaEntity methods are bound closures: pass ONLY the fluidbox index.)
   for i = 1, MAX_FLUIDBOXES do
-    local ok, conns = pcall(conduit.get_fluid_box_neighbours, i)
+    local ok, conns = pcall(conduit.get_fluid_box_pipe_connections, i)
     if not ok then break end                 -- index past this entity's fluidboxes
     if type(conns) == "table" then
       for _, conn in pairs(conns) do
-        local nb = conn.entity
-        if nb and nb.valid then infection.infect(nb) end
+        if conn.flow_direction ~= "input" then
+          local nb = conn.target
+          if nb and nb.valid then infection.infect(nb) end
+        end
       end
     end
   end

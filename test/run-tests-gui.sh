@@ -29,6 +29,18 @@ SAVE="$WORK/test-map.zip"
 rm -rf "$WORK"; mkdir -p "$MODS"
 
 cp -r "$HERE/zomtorio-tests" "$MODS/zomtorio-tests"
+
+# Optional single-test filter (same as headless): TEST_FILTER=<name substring>
+# runs only matching tests. Write/remove _filter.lua in the COPIED harness dir
+# (also clears any stale copy carried over from a headless run).
+FILTER_FILE="$MODS/zomtorio-tests/_filter.lua"
+if [[ -n "${TEST_FILTER:-}" ]]; then
+  printf 'return [[%s]]\n' "$TEST_FILTER" > "$FILTER_FILE"
+  echo ">> filtering to tests matching: \"$TEST_FILTER\""
+else
+  rm -f "$FILTER_FILE"
+fi
+
 ZOMTORIO_LINE=''
 if grep -q '"factorio_version"[[:space:]]*:[[:space:]]*"2\.' "$REPO/info.json" 2>/dev/null; then
   # copy the main mod, excluding repo cruft

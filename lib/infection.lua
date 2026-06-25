@@ -67,6 +67,10 @@ local DAMAGE_EPSILON = 0.001
 -- storage.zomtorio.infection.infected : unit_number -> { entity = <LuaEntity>,
 --                                                         last_tick = <tick> }
 -- storage.zomtorio.infection.cursor   : saved next() key for round-robin sweep.
+-- storage.zomtorio.infection.immune   : unit_number -> <tick cured>. A repaired
+--   (cured) entity is briefly immune to re-infection so a cure can stick long enough
+--   to clear a region before its still-infected neighbours re-seed it (R-INF-5 was
+--   futile under active contagion otherwise). See repair-immunity below.
 
 local function state()
   storage.zomtorio = storage.zomtorio or {}
@@ -75,6 +79,7 @@ local function state()
   local inf = z.infection
   inf.infected = inf.infected or {}
   inf.cursor = inf.cursor or nil
+  inf.immune = inf.immune or {}
   return inf
 end
 
@@ -136,6 +141,7 @@ end
 local enabled_override
 local player_enabled_override
 local ticks_override
+local immunity_override
 
 local function enabled()
   if enabled_override ~= nil then return enabled_override end
@@ -150,6 +156,13 @@ end
 local function infection_ticks()
   if ticks_override ~= nil then return ticks_override end
   return config.infection_ticks()
+end
+
+--- Post-repair immunity window in ticks (0 disables). A just-cured entity can't be
+--- re-infected for this long, giving the player time to clear a region.
+local function immunity_ticks()
+  if immunity_override ~= nil then return immunity_override end
+  return config.repair_immunity_ticks()
 end
 
 --------------------------------------------------------------------- helpers
@@ -209,8 +222,13 @@ local function process(rec, now)
   -- Cure check BEFORE damage: a fully-repaired entity clears (R-INF-5). This must
   -- precede the DoT, else repair-to-max would never be observed (we'd re-damage
   -- it on the same visit). The infecting seed (see infect()) guarantees a freshly
-  -- infected entity is below max, so this can't cure it spuriously.
-  if e.get_health_ratio() >= 1 then destroy_marker(rec); return false end
+  -- infected entity is below max, so this can't cure it spuriously. On cure, stamp a
+  -- post-repair immunity so neighbours can't instantly re-infect it (see infect()).
+  if e.get_health_ratio() >= 1 then
+    if immunity_ticks() > 0 then state().immune[e.unit_number] = now end
+    destroy_marker(rec)
+    return false
+  end
 
   local ticks = infection_ticks()
   if ticks and ticks > 0 then
@@ -239,6 +257,16 @@ function infection.infect(entity)
   local inf = state()
   local un = entity.unit_number
   if inf.infected[un] then return end  -- idempotent
+
+  -- Post-repair immunity (R-INF-5 follow-up): a recently-cured entity can't be
+  -- re-infected for a window, so repairing a region isn't undone the instant a
+  -- still-infected neighbour is swept. Expired stamps are pruned on contact.
+  local cured = inf.immune[un]
+  if cured then
+    local window = immunity_ticks()
+    if window > 0 and game.tick - cured < window then return end
+    inf.immune[un] = nil
+  end
 
   local now = game.tick
   local rec = { entity = entity, last_tick = now }
@@ -458,6 +486,11 @@ function infection.set_ticks_override(n)
   ticks_override = n
 end
 
+--- Test-only: pin (or, with nil, release) the post-repair immunity window in ticks.
+function infection.set_immunity_override(n)
+  immunity_override = n
+end
+
 --- Test-only: hard-reset all bookkeeping. Production on_init is intentionally
 --- idempotent (preserves live state across a config change), so tests that need
 --- a clean slate between cases call this instead.
@@ -468,7 +501,7 @@ function infection.reset_state()
   if inf and inf.infected then
     for _, rec in pairs(inf.infected) do destroy_marker(rec) end
   end
-  storage.zomtorio.infection = { infected = {}, cursor = nil }
+  storage.zomtorio.infection = { infected = {}, cursor = nil, immune = {} }
   storage.zomtorio.player_infection = { records = {}, health = {} }
 end
 

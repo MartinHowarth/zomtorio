@@ -149,4 +149,6 @@ remote.add_interface("zomtorio-debug", {
   -- Override the live time-to-death (ticks) so tests can drive a fast DoT; nil
   -- restores the configured setting.
   set_infection_ticks = function(n) infection.set_ticks_override(n) end,
+  -- Override the live post-repair immunity window (ticks); nil restores the setting.
+  set_immunity_ticks = function(n) infection.set_immunity_override(n) end,
 })

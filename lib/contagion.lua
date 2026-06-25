@@ -9,8 +9,9 @@
 --     belt_neighbours on a travel-time timer that is shorter on faster belts.
 --     The frontier is the SET of infected belts pending spread, seeded by an
 --     infection listener (any belt that becomes infected by any means lands here).
---   * Pipes: an infected pipe (or tank/pump) holding fluid spreads to ALL its
---     fluid-connected neighbours (no readable flow direction) on a short fixed
+--   * Fluids: any infected entity with a fluidbox (pipe, tank, pump, OR a
+--     fluid-emitting machine like a refinery/boiler) holding fluid spreads to ALL
+--     its fluid-connected neighbours (no readable flow direction) on a short fixed
 --     timer. A parallel frontier, seeded by the same infection listener.
 --
 -- No self-expiry; cure is repair or death (R-CONT-4) — we simply stop spreading
@@ -36,15 +37,10 @@ local BELT_TYPE_SET = {
   ["linked-belt"]      = true,
 }
 
--- Fluid conduits whose infection seeds the pipe-spread frontier and which
--- re-propagate: pipes, the underground pipe variant, storage tanks and pumps. They
--- all carry fluid onward, so all should pass infection along the network.
-local PIPE_TYPE_SET = {
-  ["pipe"]           = true,
-  ["pipe-to-ground"] = true,
-  ["storage-tank"]   = true,
-  ["pump"]           = true,
-}
+-- Any infected entity WITH A FLUIDBOX seeds the pipe-spread frontier — not just
+-- pipes/tanks/pumps but refineries, chemical plants, boilers, fluid-recipe assemblers,
+-- etc. So an infected machine that emits (or holds) fluid passes infection to the
+-- pipes attached to it, and vice-versa. Detected at infect-time via has_fluidbox().
 
 -- Max fluidboxes to scan per entity when spreading (safety cap; even a refinery has
 -- only a handful). Factorio 2.1 removed LuaEntity.fluidbox/.neighbours — fluid is
@@ -78,6 +74,14 @@ local BELT_TILE = 0.5
 -- items on it (presence gate, R-CONT-2): we don't spread an empty belt, but it
 -- may carry items later, so we re-arm rather than drop it.
 local BELT_RECHECK = 30
+
+-- A conduit is sampled only periodically (every ~delay ticks), so a belt that is
+-- actually flowing can read empty in the instant we look (gap between items) and we
+-- would miss it. To avoid that without sampling more often (which would cost UPS), we
+-- remember the last tick a conduit was seen carrying and treat it as still active for
+-- this window after — so spread keeps up with intermittent flow. Perf-free: it's just
+-- a stored timestamp, no extra scanning.
+local ACTIVE_WINDOW = 180
 
 --------------------------------------------------------------------- storage
 -- storage.zomtorio.contagion.movers       : unit_number -> LuaEntity (registry)
@@ -114,20 +118,28 @@ local function belt_delay(entity)
   return math.max(1, math.ceil(BELT_TILE / speed))
 end
 
---- The infection listener: when ANY belt-like entity becomes infected (mover
---- drop, enemy bite, or upstream belt), add it to the spread frontier with its
---- own travel-time timer. Idempotent on the unit_number (re-arms an existing
---- entry's timer is fine; first-seen sets it).
+--- True if the entity has at least one fluidbox (pipe, tank, pump, OR a fluid
+--- machine like a refinery/chem-plant/boiler). 2.1 has no fluidbox count member, so
+--- we probe: get_fluid_box_neighbours(1) succeeds iff fluidbox #1 exists, errors
+--- otherwise. Called only at infect-time, not per tick.
+local function has_fluidbox(entity)
+  return (pcall(entity.get_fluid_box_neighbours, 1))
+end
+
+--- The infection listener: when ANY conduit-like entity becomes infected (mover
+--- drop, enemy bite, or upstream spread), add it to the appropriate spread frontier
+--- with its own travel-time timer. Belts → belt frontier; anything with a fluidbox
+--- (pipes, tanks, pumps, and fluid-emitting machines) → pipe frontier. Idempotent on
+--- the unit_number.
 local function on_infected(entity)
   if not (entity and entity.valid) then return end
   local un = entity.unit_number
   if not un then return end
-  local t = entity.type
   local c = state()
-  if BELT_TYPE_SET[t] then
+  if BELT_TYPE_SET[entity.type] then
     if c.belts[un] then return end  -- already pending
     c.belts[un] = { entity = entity, spread_at = game.tick + belt_delay(entity) }
-  elseif PIPE_TYPE_SET[t] then
+  elseif has_fluidbox(entity) then
     if c.pipes[un] then return end
     c.pipes[un] = { entity = entity, spread_at = game.tick + PIPE_DELAY }
   end
@@ -326,9 +338,9 @@ end
 --- which returns { { entity = <connected entity>, index = <its fluidbox index> }, ... }
 --- per fluidbox. This reports true fluid topology — adjacent pipes, the far end of a
 --- pipe-to-ground across the underground gap, and connected tanks/pumps/machines — so
---- it works for any fluid entity regardless of footprint. Non-conduit consumers
---- (assemblers, boilers, ...) get infected as terminal targets; only PIPE_TYPE_SET
---- neighbours re-enter the frontier (via the infection listener) and propagate.
+--- it works for any fluid entity regardless of footprint. Every infected fluid entity
+--- (machines included) re-enters the pipe frontier via the infection listener
+--- (has_fluidbox), so fluid infection propagates through the whole connected network.
 local function spread_pipe_all(conduit)
   -- LuaEntity methods are bound closures (dot-style, no explicit self), so pass ONLY
   -- the fluidbox index — not the entity.
@@ -384,12 +396,19 @@ local function sweep_frontier(c, fname, cname, count, now, has_contents, spread_
       remove = true                                   -- cured or died (R-CONT-4)
     elseif now < rec.spread_at then
       -- Not yet its travel time; leave it pending.
-    elseif not has_contents(e) then
-      rec.spread_at = now + BELT_RECHECK              -- empty: re-arm (R-CONT-2)
     else
-      to_spread = to_spread or {}
-      to_spread[#to_spread + 1] = e
-      rec.spread_at = now + delay_fn(e)               -- spread + re-arm (persistent)
+      -- Active if it carries now OR carried within ACTIVE_WINDOW — so intermittent
+      -- flow (a gap between items at the sampling instant) doesn't stall spread
+      -- without us sampling more often. (R-CONT-2/3.)
+      local has = has_contents(e)
+      if has then rec.last_active = now end
+      if has or (rec.last_active and now - rec.last_active < ACTIVE_WINDOW) then
+        to_spread = to_spread or {}
+        to_spread[#to_spread + 1] = e
+        rec.spread_at = now + delay_fn(e)             -- spread + re-arm (persistent)
+      else
+        rec.spread_at = now + BELT_RECHECK            -- idle: re-arm (R-CONT-2)
+      end
     end
 
     if remove then

@@ -116,6 +116,19 @@ data:extend({
     maximum_value = 600,
     order = "b-b",
   },
+  -- Post-repair immunity window, in seconds (R-INF-5 follow-up). After an infected
+  -- entity is fully repaired (cured) it can't be re-infected for this long, so a cure
+  -- can stick long enough to clear a region before infected neighbours re-seed it.
+  -- 0 disables (cured entities are immediately re-infectable).
+  {
+    type = "int-setting",
+    name = "zomtorio-repair-immunity-seconds",
+    setting_type = "runtime-global",
+    default_value = 15,
+    minimum_value = 0,
+    maximum_value = 120,
+    order = "b-b2",
+  },
   -- Player infection (R-PINF-1).
   {
     type = "bool-setting",

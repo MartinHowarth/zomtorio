@@ -31,6 +31,12 @@ function config.infection_ticks()
   return math.floor((global_value("zomtorio-infection-seconds") or 300) * 60)
 end
 
+--- Ticks a just-repaired (cured) entity stays immune to re-infection (R-INF-5
+--- follow-up); 0 disables.
+function config.repair_immunity_ticks()
+  return math.floor((global_value("zomtorio-repair-immunity-seconds") or 15) * 60)
+end
+
 ------------------------------------------------------------------- night
 --- Fraction added to daytime movement speed at night (R-NIGHT); 1.0 = +100%.
 --- STARTUP setting: the sticker that delivers the boost bakes this into its

@@ -22,6 +22,7 @@ local T = require("harness.runner")
 local DEBUG = "zomtorio-debug"
 local function is_infected(e)       return remote.call(DEBUG, "is_infected", e) end
 local function set_ticks(n)         return remote.call(DEBUG, "set_infection_ticks", n) end
+local function set_immunity(n)      return remote.call(DEBUG, "set_immunity_ticks", n) end
 
 local function enemy() return game.forces.enemy end
 
@@ -320,5 +321,80 @@ T.test("REAL: an infected fluid-filled storage tank spreads to connected pipes",
       if p.valid and is_infected(p) then any = true; break end
     end
     t.assert.is_true(any, "an infected fluid-filled tank spread to a connected pipe")
+  end },
+})
+
+-- =====================================================================
+-- I. A fluid-emitting MACHINE (not a pipe/tank/pump) spreads to attached pipes —
+--    the refinery case. A boiler always has fluidboxes; fill it, infect it, and a
+--    connected pipe must get infected (proves has_fluidbox catches machines too).
+-- =====================================================================
+T.test("REAL: an infected fluid machine (boiler) spreads to attached pipes", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 14)
+    set_ticks(36000)
+    t.boiler = t.world.place(t.surface, "boiler", o)
+    t.pipes = {}
+    for dx = -3, 3 do
+      for dy = -3, 3 do
+        if math.abs(dx) >= 2 or math.abs(dy) >= 2 then  -- ring outside the footprint
+          local p = t.world.place(t.surface, "pipe", { x = o.x + dx, y = o.y + dy })
+          if p then t.pipes[#t.pipes + 1] = p end
+        end
+      end
+    end
+    t.boiler.insert_fluid { name = "water", amount = 200 }
+    bite(t.boiler)
+  end,
+  { after = 3, fn = function(t)
+    t.assert.is_true(is_infected(t.boiler), "boiler infected by the bite")
+  end },
+  { after = 150, fn = function(t)
+    local any = false
+    for _, p in ipairs(t.pipes) do
+      if p.valid and is_infected(p) then any = true; break end
+    end
+    t.assert.is_true(any, "an infected fluid-holding machine spread to a connected pipe")
+  end },
+})
+
+-- =====================================================================
+-- J. Post-repair immunity (R-INF-5 follow-up): a just-cured entity can't be
+--    re-infected during the immunity window, so a cure sticks long enough to clear
+--    a region; after the window it's re-infectable again.
+-- =====================================================================
+T.test("REAL: a repaired entity is briefly immune to re-infection, then re-infectable", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 10)
+    set_ticks(36000)        -- slow DoT: we control the cure ourselves
+    set_immunity(180)       -- 3s immunity window
+    t.chest = t.world.place(t.surface, "steel-chest", o)
+    t.max = t.chest.max_health
+    bite(t.chest)
+  end,
+  { after = 3, fn = function(t)
+    t.assert.is_true(is_infected(t.chest), "infected by the bite")
+    -- "Repair" to full; the live DoT sweep observes the cure on its next visit
+    -- (round-robin, up to ~PROCESS_PERIOD ticks away with other infected present).
+    t.chest.health = t.max
+  end },
+  { after = 60, fn = function(t)
+    t.assert.is_false(is_infected(t.chest), "fully repaired -> cured")
+    -- Immediately bite again: must be blocked by the immunity window.
+    bite(t.chest)
+  end },
+  { after = 10, fn = function(t)
+    t.assert.is_false(is_infected(t.chest),
+      "a just-repaired entity must resist re-infection during the immunity window")
+  end },
+  -- After the window expires, it can be infected again.
+  { after = 200, fn = function(t)
+    bite(t.chest)
+  end },
+  { after = 5, fn = function(t)
+    t.assert.is_true(is_infected(t.chest),
+      "after the immunity window expires, the entity is re-infectable")
   end },
 })

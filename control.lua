@@ -135,6 +135,21 @@ script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
   swarm.on_runtime_setting_changed(event)
 end)
 
+------------------------------------------------------------------- commands
+-- Trigger a HORDE now: a telegraphed attack-wave (the "swarm event" state machine
+-- in lib/swarm). Optional parameter = duration in minutes. A custom command (not
+-- /c) so it does NOT disable achievements. Usage: /zomtorio-horde   or  /zomtorio-horde 2
+commands.add_command(
+  "zomtorio-horde",
+  "Start a Zomtorio horde (attack wave) now. Optional: duration in minutes.",
+  function(cmd)
+    local mins = tonumber(cmd.parameter)
+    local dur = swarm.force_event(mins)
+    game.print("Zomtorio: a horde is attacking now (" ..
+      (math.floor(dur / 3600 * 10) / 10) .. " min). Defend!")
+  end
+)
+
 ------------------------------------------------------------------- debug remote
 -- A tiny introspection interface so the (separate) test harness mod can observe
 -- THIS mod's real runtime state and effects. A test that `require`s our lib files

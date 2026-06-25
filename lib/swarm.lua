@@ -189,7 +189,8 @@ local function state()
   storage.zomtorio = storage.zomtorio or {}
   local s = storage.zomtorio.swarm
   if not s then
-    s = { next_event_tick = nil, warned = false, active = false, period_end_tick = nil }
+    s = { next_event_tick = nil, warned = false, active = false,
+          period_end_tick = nil, forced_until = nil }
     storage.zomtorio.swarm = s
   end
   return s
@@ -306,7 +307,10 @@ function swarm.on_tick(event)
   local night_now = night.is_night(surface)
 
   ------------------------------------------------------- swarm event (R-GEN-5)
-  if opt_enabled() then
+  -- Process the active branch whenever an event is running, even if the on/off
+  -- setting is disabled: a manually forced event (swarm.force_event) must still
+  -- run and clean up. Only the SCHEDULING of new events is gated on the setting.
+  if opt_enabled() or s.active then
     if s.next_event_tick == nil then
       s.next_event_tick = tick + swarm.event_interval_ticks(e, opt_frequency())
     end
@@ -318,10 +322,14 @@ function swarm.on_tick(event)
         count = clamp(count, 1, SWARM_BURST_CAP)
         spawn_near_anchors(surface, count, swarm_tier(e), tick)
       end
-      -- End at period_end OR at dawn — "at most one full night" (R-GEN-5).
-      if tick >= (s.period_end_tick or tick) or not night_now then
+      -- End at period_end OR at dawn — "at most one full night" (R-GEN-5). A
+      -- FORCED event ignores the dawn end until its forced window elapses, so a
+      -- debug trigger works in daylight too.
+      local forced = s.forced_until ~= nil and tick < s.forced_until
+      if tick >= (s.period_end_tick or tick) or (not night_now and not forced) then
         s.active = false
         s.period_end_tick = nil
+        s.forced_until = nil
         s.warned = false
         s.next_event_tick = tick + swarm.event_interval_ticks(e, opt_frequency())
       end
@@ -352,6 +360,30 @@ function swarm.on_tick(event)
   end
 end
 
+--- Force a horde (telegraphed attack-wave; "swarm event" in the code) to start
+--- RIGHT NOW, regardless of the schedule, the on/off setting, or time of day —
+--- the debug/console trigger (control.lua registers `/zomtorio-horde` for it).
+--- `minutes` overrides the spawning-period length; nil uses the evolution-scaled
+--- default. Returns the duration in ticks.
+function swarm.force_event(minutes)
+  local s = state()
+  local surface = game and game.surfaces and game.surfaces[util.HOME_SURFACE]
+  local tick = (game and game.tick) or 0
+  local e = evolution(surface)
+  local dur
+  if minutes and minutes > 0 then
+    dur = math.floor(minutes * 3600)
+  else
+    dur = swarm.spawning_period_ticks(e, opt_intensity())
+  end
+  s.active = true
+  s.warned = true                 -- already "telegraphed" (it's manual)
+  s.period_end_tick = tick + dur
+  s.forced_until = tick + dur     -- run day or night until this tick
+  s.next_event_tick = nil
+  return dur
+end
+
 --------------------------------------------------------------------- test API
 
 --- Test/helper: re-apply map settings AND reset the event state machine to a
@@ -368,6 +400,7 @@ function swarm.reset_state()
     warned = false,
     active = false,
     period_end_tick = nil,
+    forced_until = nil,
   }
 end
 
@@ -401,6 +434,7 @@ function swarm.get_state()
     warned          = s.warned,
     active          = s.active,
     period_end_tick = s.period_end_tick,
+    forced_until    = s.forced_until,
   }
 end
 

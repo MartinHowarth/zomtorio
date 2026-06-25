@@ -118,6 +118,29 @@ T.test("R-GEN-5: the event only begins at night, not by day", {
   end },
 })
 
+------------------------------------------------------ forced (debug) horde trigger
+
+-- swarm.force_event (the /zomtorio-horde command) starts a horde RIGHT NOW even in
+-- daylight and even with the on/off setting disabled — and a daytime tick within
+-- the forced window must not end it (a forced event bypasses the dawn end).
+T.test("force_event starts a horde now and survives daylight (debug trigger)", function(t)
+  reset(t)
+  set_noon(t.surface)                       -- daytime: a scheduled event couldn't start
+  swarm.set_overrides { enabled = false }   -- and events are even disabled
+  swarm.set_evolution_override(0.5)
+
+  swarm.force_event(1)                       -- force a 1-minute horde
+  local s = swarm.get_state()
+  t.assert.is_true(s.active, "forced horde is active immediately")
+  t.assert.not_nil(s.forced_until, "forced window is set")
+
+  -- A throttle-aligned daytime tick just inside the window must NOT end it.
+  local fu = s.forced_until
+  local tk = fu - (fu % 60) - 60
+  swarm.on_tick { tick = tk }
+  t.assert.is_true(swarm.get_state().active, "forced horde persists through daylight")
+end)
+
 ------------------------------------------------------ active event spawns via horde
 
 T.test("R-GEN-5/6: an active swarm spawns zombies near a player via the unified spawner", {

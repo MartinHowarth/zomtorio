@@ -6,6 +6,7 @@
 
 require("prototypes.damage-types")   -- S8: the "zombie-melee" damage type
 require("prototypes.entities")       -- S2: horde-unit entities (cluster tiers)
+require("prototypes.night")          -- S9: night-haste sticker (R-NIGHT)
 require("prototypes.items")          -- S7: corpse + kiln-dried corpse items
 require("prototypes.recipes")        -- S7: kiln recipe (fallback corpse-kiln)
 require("prototypes.technology")     -- S8: melee upgrade technologies

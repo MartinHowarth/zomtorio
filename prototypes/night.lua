@@ -1,0 +1,39 @@
+-- S9 — night aggression prototypes (R-NIGHT-1/2).
+--
+-- ENGINE CONSTRAINT (verified in-sim, see lib/night.lua header): there is no
+-- runtime way to speed up a single `unit` entity in 2.1 — sticker
+-- target_movement_modifier is explicitly NOT applied to units (base changelog),
+-- and writing LuaEntity.speed does not change AI movement. The only lever is the
+-- prototype's movement_speed, which is fixed at the data stage. So the night
+-- boost is delivered by NIGHT VARIANT unit prototypes: a faster clone of each
+-- base zombie. lib/night.lua swaps enemy units near a player to their night
+-- variant at night and back to the day prototype by day.
+--
+-- The speed factor (1 + speedup) is baked here from the night-speedup STARTUP
+-- setting; config.night_speedup() reads the same setting at runtime so the two
+-- agree. v1 covers the base vanilla biters (S10 will add the dense zombie
+-- prototypes; this file is structured to clone whatever the day prototypes are).
+
+local speedup = settings.startup["zomtorio-night-speedup"].value or 1.0
+local factor = 1 + speedup
+
+-- Day prototype name -> night variant name. lib/night.lua reads this mapping.
+-- Keyed on the vanilla biters/spitters for v1.
+local NIGHT_VARIANTS = {
+  "small-biter", "medium-biter", "big-biter", "behemoth-biter",
+  "small-spitter", "medium-spitter", "big-spitter", "behemoth-spitter",
+}
+
+for _, base_name in ipairs(NIGHT_VARIANTS) do
+  local base = data.raw.unit[base_name]
+  if base then
+    local night = table.deepcopy(base)
+    night.name = base_name .. "-zomtorio-night"
+    night.movement_speed = (base.movement_speed or 0.1) * factor
+    -- Night variants are an internal swap target, not a separately-spawnable or
+    -- map-listed enemy. Hide from selection/listings; keep collision/combat.
+    night.hidden = true
+    -- A night variant must never itself be remapped or counted as a "day" unit.
+    data:extend({ night })
+  end
+end

@@ -50,6 +50,21 @@ data:extend({
     maximum_value = 10.0,
     order = "g-b",
   },
+  -- Night speedup as a fraction added to daytime speed (R-NIGHT): 1.0 = +100%.
+  -- STARTUP, not runtime-global: the speed boost is delivered by a sticker whose
+  -- target_movement_modifier is a prototype constant baked at the data stage
+  -- (the engine has no live per-unit speed setter for `unit` entities), so the
+  -- slider can only take effect on a restart. Still a slider — the honest way to
+  -- honor R-NIGHT-2 given the engine constraint. Read via config.night_speedup().
+  {
+    type = "double-setting",
+    name = "zomtorio-night-speedup",
+    setting_type = "startup",
+    default_value = 1.0,
+    minimum_value = 0.0,
+    maximum_value = 3.0,
+    order = "d-a",
+  },
 
   -- ---------------------------------------------------------- runtime-global
   -- Overall horde-size multiplier applied to generated counts (R-HORDE-7).
@@ -98,16 +113,6 @@ data:extend({
     setting_type = "runtime-global",
     default_value = true,
     order = "b-c",
-  },
-  -- Night speedup as a fraction added to daytime speed (R-NIGHT): 1.0 = +100%.
-  {
-    type = "double-setting",
-    name = "zomtorio-night-speedup",
-    setting_type = "runtime-global",
-    default_value = 1.0,
-    minimum_value = 0.0,
-    maximum_value = 3.0,
-    order = "d-a",
   },
   -- Base expansion / spread rate multiplier (R-GEN-3, R-GEN-7).
   {

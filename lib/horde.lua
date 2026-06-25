@@ -251,6 +251,20 @@ function horde.on_removed(event)
   if e and e.valid then forget(e.unit_number) end
 end
 
+--- Is this individual (by unit_number) currently counted against the cap?
+function horde.is_tracked(unit_number)
+  if unit_number == nil then return false end
+  return state().individuals[unit_number] == true
+end
+
+--- Register an externally-created individual zombie so it counts against the cap.
+--- Used by night.lua: swapping a tracked unit for its faster night variant
+--- destroys the old one (which frees its cap slot via on_removed), so the new
+--- variant must be re-tracked or the cap would silently drift down.
+function horde.track(entity)
+  track_individual(entity)
+end
+
 --------------------------------------------------------------------- test API
 
 --- Number of live individual zombies we've spawned (cap accounting).

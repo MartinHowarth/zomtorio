@@ -13,6 +13,11 @@ local function global_value(name)
   return s and s.value
 end
 
+local function startup_value(name)
+  local s = settings.startup[name]
+  return s and s.value
+end
+
 ------------------------------------------------------------------- horde / cap
 function config.horde_size_multiplier() return global_value("zomtorio-horde-size-multiplier") end
 function config.zombie_cap()            return global_value("zomtorio-zombie-cap") end
@@ -28,7 +33,10 @@ end
 
 ------------------------------------------------------------------- night
 --- Fraction added to daytime movement speed at night (R-NIGHT); 1.0 = +100%.
-function config.night_speedup() return global_value("zomtorio-night-speedup") end
+--- STARTUP setting: the sticker that delivers the boost bakes this into its
+--- target_movement_modifier at the data stage (= 1 + this), so it can't be read
+--- live. config.lua and prototypes/night.lua MUST agree on this conversion.
+function config.night_speedup() return startup_value("zomtorio-night-speedup") or 1.0 end
 
 ------------------------------------------------------------------- generation
 function config.expansion_rate()           return global_value("zomtorio-expansion-rate") end

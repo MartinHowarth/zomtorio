@@ -53,6 +53,10 @@ local MAX_FLUIDBOXES = 8
 -- use a short fixed travel time before an infected pipe spreads to its neighbours.
 local PIPE_DELAY = 15
 
+-- A pump services a fluid wagon stopped beside it, but that link is not exposed by any
+-- fluidbox API, so an infected pump finds its wagon by proximity within this radius.
+local PUMP_WAGON_RADIUS = 3
+
 -- Fixed per-tick work budget (R-CONT-7): at most this many spread-checks total
 -- across BOTH vectors each tick, regardless of how big the world is. Exceeding
 -- it just spreads the work over more ticks. Tunable; a test override exists.
@@ -357,31 +361,25 @@ local function spread_pipe_all(conduit)
     if not ok then break end                 -- index past this entity's fluidboxes
     if type(conns) == "table" then
       for _, conn in pairs(conns) do
-        local nb = conn.target
-        -- Downstream (output / bidirectional) only — EXCEPT a fluid wagon, which we
-        -- always infect when connected (loaded or unloaded), like a cargo wagon.
-        if nb and nb.valid and (conn.flow_direction ~= "input" or nb.type == "fluid-wagon") then
-          infection.infect(nb)
+        if conn.flow_direction ~= "input" then
+          local nb = conn.target
+          if nb and nb.valid then infection.infect(nb) end
         end
       end
     end
   end
-  -- Fluid wagons connect to PUMPS dynamically and don't show up in pipe_connections
-  -- (their fluidbox is only exposed via get_fluid_box_neighbours), so the directional
-  -- pass above misses them. Catch them here — pumps only, and only rolling stock, so
-  -- normal machine ports stay directional (no upstream spread). Direction-agnostic:
-  -- a wagon being loaded OR unloaded by an infected pump should get infected, exactly
-  -- like an inserter infects a cargo wagon either way.
+  -- Pump <-> fluid-wagon: the wagon transfer is NOT a fluidbox connection — the wagon
+  -- shows up in NEITHER get_fluid_box_pipe_connections NOR get_fluid_box_neighbours of
+  -- the pump (verified in-game). So detect the serviced wagon geometrically: infect any
+  -- fluid-wagon within the pump's short connection reach. Cheap (tiny-area find, pumps
+  -- are few and this is throttled), and direction-agnostic — like an inserter infecting
+  -- a cargo wagon whether loading or unloading. A non-rail pump simply finds none.
   if conduit.type == "pump" then
-    for i = 1, MAX_FLUIDBOXES do
-      local ok, ns = pcall(conduit.get_fluid_box_neighbours, i)
-      if not ok then break end
-      if type(ns) == "table" then
-        for _, n in pairs(ns) do
-          local nb = n.entity
-          if nb and nb.valid and nb.type == "fluid-wagon" then infection.infect(nb) end
-        end
-      end
+    local wagons = conduit.surface.find_entities_filtered {
+      type = "fluid-wagon", position = conduit.position, radius = PUMP_WAGON_RADIUS,
+    }
+    for _, w in pairs(wagons) do
+      if w.valid then infection.infect(w) end
     end
   end
 end

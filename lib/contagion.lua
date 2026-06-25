@@ -357,9 +357,29 @@ local function spread_pipe_all(conduit)
     if not ok then break end                 -- index past this entity's fluidboxes
     if type(conns) == "table" then
       for _, conn in pairs(conns) do
-        if conn.flow_direction ~= "input" then
-          local nb = conn.target
-          if nb and nb.valid then infection.infect(nb) end
+        local nb = conn.target
+        -- Downstream (output / bidirectional) only — EXCEPT a fluid wagon, which we
+        -- always infect when connected (loaded or unloaded), like a cargo wagon.
+        if nb and nb.valid and (conn.flow_direction ~= "input" or nb.type == "fluid-wagon") then
+          infection.infect(nb)
+        end
+      end
+    end
+  end
+  -- Fluid wagons connect to PUMPS dynamically and don't show up in pipe_connections
+  -- (their fluidbox is only exposed via get_fluid_box_neighbours), so the directional
+  -- pass above misses them. Catch them here — pumps only, and only rolling stock, so
+  -- normal machine ports stay directional (no upstream spread). Direction-agnostic:
+  -- a wagon being loaded OR unloaded by an infected pump should get infected, exactly
+  -- like an inserter infects a cargo wagon either way.
+  if conduit.type == "pump" then
+    for i = 1, MAX_FLUIDBOXES do
+      local ok, ns = pcall(conduit.get_fluid_box_neighbours, i)
+      if not ok then break end
+      if type(ns) == "table" then
+        for _, n in pairs(ns) do
+          local nb = n.entity
+          if nb and nb.valid and nb.type == "fluid-wagon" then infection.infect(nb) end
         end
       end
     end

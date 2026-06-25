@@ -187,7 +187,18 @@ local function tick()
 end
 
 --- Wire up the scheduler. Call once from control.lua after specs are required.
+--- If an optional `_filter` module is present (written by run-tests.sh when the
+--- TEST_FILTER env var is set), keep only tests whose name contains that
+--- substring — so you can run a single test in isolation.
 function runner.start()
+  local ok, pattern = pcall(require, "_filter")
+  if ok and type(pattern) == "string" and pattern ~= "" then
+    local kept = {}
+    for _, t in ipairs(tests) do
+      if string.find(t.name, pattern, 1, true) then kept[#kept + 1] = t end
+    end
+    tests = kept
+  end
   script.on_event(defines.events.on_tick, tick)
 end
 

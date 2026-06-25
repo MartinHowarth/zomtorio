@@ -27,6 +27,13 @@ also written to `test/.factorio-data/script-output/test-results.json`.
 | `FACTORIO_SERVER` | `~/factorio-headless/factorio` | headless install dir |
 | `ENABLE_SPACE_AGE` | `1` | Space Age DLC on by default (mod requires it); `0` forces base-only |
 | `BENCH_TICKS` | `30000` | ticks to run; must exceed the sum of all test waits |
+| `TEST_FILTER` | (unset) | run only tests whose name contains this substring |
+
+Run a single test, e.g. the contagion chain:
+
+```bash
+TEST_FILTER="end to end" ./test/run-tests.sh
+```
 
 > Note: spoilage and quality are Space-Age feature flags (`ENABLE_SPACE_AGE=1`).
 > Tests that rely on corpse-spoilage reanimation will need it on.

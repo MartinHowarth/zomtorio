@@ -34,6 +34,17 @@ LOG="$TDATA/server.log"
 rm -rf "$TDATA"
 mkdir -p "$MODS" "$OUT"
 
+# Optional single-test filter: TEST_FILTER=<name substring> runs only the tests
+# whose name contains that substring (the harness reads the generated _filter.lua;
+# absent => run everything). Written into the harness mod dir so require() finds it.
+FILTER_FILE="$HERE/zomtorio-tests/_filter.lua"
+if [[ -n "${TEST_FILTER:-}" ]]; then
+  printf 'return [[%s]]\n' "$TEST_FILTER" > "$FILTER_FILE"
+  echo ">> filtering to tests matching: \"$TEST_FILTER\""
+else
+  rm -f "$FILTER_FILE"
+fi
+
 # Link the harness mod (unzipped folder named exactly its mod name).
 ln -sfn "$HERE/zomtorio-tests" "$MODS/zomtorio-tests"
 # Link the main mod too, but only once it's a valid 2.1 mod (so the harness can

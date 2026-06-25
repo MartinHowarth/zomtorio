@@ -133,6 +133,11 @@ end)
 -- handlers operate on the real mod's storage. Registered at script load so it
 -- exists after every load, not only on_init.
 remote.add_interface("zomtorio-debug", {
+  -- Force-infect an entity directly (for testing). Obeys the same rules as a real
+  -- bite (walls/gates/enemy units excluded), then takes the DoT / spreads / shows
+  -- the biohazard marker like any infection. Example from the console:
+  --   /c remote.call("zomtorio-debug", "infect", game.player.selected)
+  infect = function(entity) infection.infect(entity) end,
   -- Is this entity in the live building-infection set?
   is_infected = function(entity) return infection.is_infected(entity) end,
   -- Is this character in the live player-infection set?

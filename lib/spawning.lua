@@ -1,9 +1,15 @@
 -- S3 — buildings become zombie sources on death (R-DEATH).
 --
 -- When a non-wall building is destroyed by something on the infected (enemy)
--- force, it spawns zombies equal to its total-raw solid cost, at a tier chosen
--- by how much oil its cost involved. The zombies spawn on the enemy force and
--- route through the unified cap-aware spawner (R-HORDE-6).
+-- force, it spawns zombies equal to its total-raw solid cost, all of the BASIC
+-- tier. The zombies spawn on the enemy force and route through the unified
+-- cap-aware spawner (R-HORDE-6).
+--
+-- NOTE (playtest decision, overrides R-DEATH-4): building deaths no longer pick a
+-- stronger zombie tier from oil/ingredients. Spawning high-tier biters from
+-- buildings proved too strong; the threat comes from the SHEER NUMBERS (a building
+-- yields its whole raw cost in basic zombies), not from individual strength. So
+-- every building-death zombie is the basic tier, and only the COUNT scales.
 --
 -- Player-caused destruction must NOT spawn zombies (R-DEATH-1). Deconstruction,
 -- self-mining and blueprint removal fire on_player/robot_mined_entity (NOT
@@ -18,18 +24,8 @@ local util     = require("lib.util")
 
 local spawning = {}
 
--- Oil thresholds for zombie tier (R-DEATH-4), carried over from the old mod:
--- a costly oil presence yields the strongest zombies, any oil yields medium,
--- and a purely-solid cost yields the basic tier.
-local OIL_BIG_THRESHOLD    = 50
-local OIL_MEDIUM_THRESHOLD = 0
-
---- Pick a zombie tier from the oil amount in the building's decomposed cost.
-local function tier_for_oil(oil)
-  if oil > OIL_BIG_THRESHOLD then return "big" end
-  if oil > OIL_MEDIUM_THRESHOLD then return "medium" end
-  return "small"
-end
+-- All building-death zombies are the basic tier (see playtest note above).
+local DEATH_TIER = "small"
 
 --- True if the death was caused by the enemy force — either the killing
 --- force is the enemy force, or the (valid) cause entity is on it.
@@ -56,16 +52,15 @@ function spawning.on_entity_died(event)
   -- Only enemy-caused deaths spawn zombies (R-DEATH-1).
   if not enemy_caused(event) then return end
 
-  -- Count = total-raw solid cost, scaled by the horde-size multiplier
-  -- (R-DEATH-2 / R-HORDE-7). Fluids don't add to the count (only the tier).
-  local solid, oil = raw_cost.for_entity(entity.name)
+  -- Count = total-raw solid cost (R-DEATH-2). Fluids don't add to the count.
+  local solid = raw_cost.for_entity(entity.name)
   if solid <= 0 then return end  -- non-buildings (trees/rocks) decompose to 0
 
   -- Count = total-raw solid cost (R-DEATH-2). The overall horde-size multiplier
   -- (R-HORDE-7) is applied centrally in horde.spawn, which also guarantees a
-  -- qualifying building always yields at least one zombie.
-  local tier = tier_for_oil(oil)
-  horde.spawn(entity.surface, entity.position, solid, tier, util.ENEMY_FORCE)
+  -- qualifying building always yields at least one zombie. Always the basic tier
+  -- (playtest decision): the threat is numbers, not per-zombie strength.
+  horde.spawn(entity.surface, entity.position, solid, DEATH_TIER, util.ENEMY_FORCE)
 end
 
 return spawning

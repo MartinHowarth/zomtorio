@@ -217,3 +217,35 @@ T.test("an infected conduit dies and spawns zombies (R-CONT-5)", {
     t.assert.at_least(1, #zombies, "a dead conduit spawns a (small) number of zombies")
   end },
 })
+
+-- Regression (crash "invalid key to 'next'"): the round-robin cursor is saved
+-- across ticks, but an entry it points at can be removed between ticks via
+-- on_removed (a belt/inserter that DIED from the DoT — common once contagion is
+-- killing conduits). next(table, <removed key>) then raises. Both the belt frontier
+-- and the mover registry guard against a stale cursor; this exercises the belt one.
+T.test("a belt frontier cursor pointing at an absent key doesn't crash", {
+  function(t)
+    reset()
+    local o = t.test_origin
+    t.world.clear(t.surface, o)
+    -- A NON-EMPTY frontier (the crash is next(non-empty-table, <absent key>)).
+    for i = 0, 3 do
+      local b = t.world.place(t.surface, "transport-belt", { x = o.x + i, y = o.y })
+      infection.infect(b)
+    end
+    tick_contagion()
+    -- Reproduce the real hazard deterministically: in live play the cursor's belt
+    -- dies (on_removed nils it), and a later frontier insertion rehashes the table,
+    -- discarding the dead node — so next() is handed a key GENUINELY ABSENT from a
+    -- non-empty table and raises "invalid key to 'next'". A chest's unit_number is
+    -- never a belt-frontier key, so it stands in for that absent key exactly. (The
+    -- test-mod's contagion shares this mod's storage, so we can set the cursor.)
+    local chest = t.world.place(t.surface, "steel-chest", { x = o.x, y = o.y + 3 })
+    storage.zomtorio.contagion.belt_cursor = chest.unit_number
+  end,
+  { after = 1, fn = function(t)
+    -- Pre-fix this threw "invalid key to 'next'"; the cursor guard must absorb it.
+    local ok, err = pcall(tick_contagion)
+    t.assert.is_true(ok, "sweep must survive an absent cursor key (got: " .. tostring(err) .. ")")
+  end },
+})

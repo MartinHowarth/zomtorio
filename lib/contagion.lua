@@ -203,6 +203,11 @@ end
 local function sweep_movers(c, count)
   local movers = c.movers
   local key = c.mover_cursor
+  -- The cursor is saved across ticks; the entry it points at may have been removed
+  -- since (a mover mined/destroyed/died via on_removed — death-by-DoT is common),
+  -- and next() raises "invalid key to 'next'" on a key no longer in the table.
+  -- Restart the round-robin from the top if the saved cursor went stale.
+  if key ~= nil and movers[key] == nil then key = nil end
   local done = 0
   while done < count do
     local un, m = next(movers, key)
@@ -286,6 +291,10 @@ end
 local function sweep_belts(c, count, now)
   local belts = c.belts
   local key = c.belt_cursor
+  -- Saved cursor may point at a belt removed since last tick (mined/destroyed/died
+  -- via on_removed); next() raises "invalid key to 'next'" on a stale key. Restart
+  -- the walk from the top if so.
+  if key ~= nil and belts[key] == nil then key = nil end
   local done = 0
   -- Infecting downstream mutates `belts` (via the on_infected listener), which is
   -- undefined to do mid-next(); collect the belts to spread and do it after the walk.

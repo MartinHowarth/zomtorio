@@ -139,26 +139,29 @@ T.test("a death with no force or cause spawns no zombies", function(t)
   t.assert.equal(0, total_pop(t.surface, pos), "non-enemy death spawns nothing")
 end)
 
--- ---------------------------------------------------- oil building -> tier
--- A building whose cost includes oil (assembling-machine-3, per S1) spawns a
--- higher tier than the basic "small" (R-DEATH-4).
-T.test("an oil-cost building spawns a higher-tier cluster", function(t)
+-- ------------------------------------------- building death -> always basic tier
+-- Playtest decision (overrides R-DEATH-4): a building death ALWAYS spawns the basic
+-- tier, no matter how expensive or oily the building's cost. Spawning high-tier
+-- biters from buildings proved too strong; the threat is the sheer NUMBER of basic
+-- zombies, not their individual strength. Here an oil-cost building
+-- (assembling-machine-3) must still yield only "small"-tier zombies.
+T.test("a building death always spawns the basic tier (no oil escalation)", function(t)
   reset()
   local o = t.test_origin
   t.world.clear(t.surface, o)
-  local building = t.world.place(t.surface, "assembling-machine-3", o)
+  local building = t.world.place(t.surface, "assembling-machine-3", o)  -- oil in its cost
   local pos = building.position
 
   spawning.on_entity_died { entity = building, force = game.forces.enemy }
 
-  -- No "small" clusters should exist; the spawn must be medium or big.
+  -- The basic tier must appear; no medium/big from a building death.
   local small = t.surface.find_entities_filtered {
     name = tiers.HORDE.small, position = pos, radius = 48,
   }
-  t.assert.equal(0, #small, "oil building must not spawn the basic 'small' tier")
+  t.assert.at_least(1, #small, "building death spawns the basic 'small' tier")
 
   local higher = t.surface.find_entities_filtered {
     name = { tiers.HORDE.medium, tiers.HORDE.big }, position = pos, radius = 48,
   }
-  t.assert.at_least(1, #higher, "oil building spawns a medium/big cluster")
+  t.assert.equal(0, #higher, "building death must NOT spawn medium/big tiers")
 end)

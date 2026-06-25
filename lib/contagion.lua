@@ -36,24 +36,21 @@ local BELT_TYPE_SET = {
   ["linked-belt"]      = true,
 }
 
--- Pipe-like fluid conduits whose infection seeds the pipe-spread frontier and which
--- re-propagate. Limited to the 1x1 pipe entities: connectivity is derived positionally
--- (pipes connect on orthogonal faces), which is exact for these. (LuaEntity exposes
--- neither .fluidbox nor .neighbours in 2.1, so we can't read true fluid topology.)
+-- Fluid conduits whose infection seeds the pipe-spread frontier and which
+-- re-propagate: pipes, the underground pipe variant, storage tanks and pumps. They
+-- all carry fluid onward, so all should pass infection along the network.
 local PIPE_TYPE_SET = {
   ["pipe"]           = true,
   ["pipe-to-ground"] = true,
+  ["storage-tank"]   = true,
+  ["pump"]           = true,
 }
 
--- Types an infected pipe infects on each face. Tanks/pumps are infected as terminal
--- targets (they die from the DoT) but aren't in PIPE_TYPE_SET, so they don't
--- re-propagate — the fluid chain effectively stops at a tank/pump. Likewise the far
--- end of a pipe-to-ground (across the underground gap) isn't reached. Acceptable v1
--- limitations; contiguous pipe runs — the common case — spread fully.
-local PIPE_NEIGHBOUR_TYPES = { "pipe", "pipe-to-ground", "storage-tank", "pump" }
-
--- The four orthogonal tile offsets a pipe can connect across.
-local PIPE_OFFSETS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+-- Max fluidboxes to scan per entity when spreading (safety cap; even a refinery has
+-- only a handful). Factorio 2.1 removed LuaEntity.fluidbox/.neighbours — fluid is
+-- accessed directly on the entity now — so there's no count member; we just scan
+-- indices until get_fluid_box_neighbours errors on an out-of-range one.
+local MAX_FLUIDBOXES = 8
 
 -- Pipes have no exposed flow rate, so we can't scale the spread delay by speed the
 -- way belts do (belt_speed). Fluid equalises across a connected segment quickly, so
@@ -323,21 +320,26 @@ local function pipe_has_fluid(pipe)
   return (pipe.get_fluid_count and pipe.get_fluid_count() or 0) > 0
 end
 
---- Infect every fluid-connected neighbour of `pipe`, in ALL directions (a fluid
---- network has no readable flow direction). Pipes connect on their four orthogonal
---- faces, so a point-find on each adjacent tile yields exactly the connected conduit
---- there — no false diagonal jumps, and multi-tile tanks/pumps occupying a face tile
---- are caught too. (LuaEntity exposes neither .fluidbox nor .neighbours in 2.1, so we
---- derive connectivity positionally.)
-local function spread_pipe_all(pipe)
-  local p, surf = pipe.position, pipe.surface
-  for _, off in ipairs(PIPE_OFFSETS) do
-    local found = surf.find_entities_filtered {
-      position = { x = p.x + off[1], y = p.y + off[2] },
-      type = PIPE_NEIGHBOUR_TYPES,
-    }
-    for _, nb in pairs(found) do
-      if nb.valid and nb ~= pipe then infection.infect(nb) end
+--- Infect every fluid-connected neighbour of `conduit`, in ALL directions (a fluid
+--- network has no readable flow direction). Factorio 2.1 removed LuaEntity.fluidbox /
+--- .neighbours; the connections now come from LuaEntity.get_fluid_box_neighbours(i),
+--- which returns { { entity = <connected entity>, index = <its fluidbox index> }, ... }
+--- per fluidbox. This reports true fluid topology — adjacent pipes, the far end of a
+--- pipe-to-ground across the underground gap, and connected tanks/pumps/machines — so
+--- it works for any fluid entity regardless of footprint. Non-conduit consumers
+--- (assemblers, boilers, ...) get infected as terminal targets; only PIPE_TYPE_SET
+--- neighbours re-enter the frontier (via the infection listener) and propagate.
+local function spread_pipe_all(conduit)
+  -- LuaEntity methods are bound closures (dot-style, no explicit self), so pass ONLY
+  -- the fluidbox index — not the entity.
+  for i = 1, MAX_FLUIDBOXES do
+    local ok, conns = pcall(conduit.get_fluid_box_neighbours, i)
+    if not ok then break end                 -- index past this entity's fluidboxes
+    if type(conns) == "table" then
+      for _, conn in pairs(conns) do
+        local nb = conn.entity
+        if nb and nb.valid then infection.infect(nb) end
+      end
     end
   end
 end

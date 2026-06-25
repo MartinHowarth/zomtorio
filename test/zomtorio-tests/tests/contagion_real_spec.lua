@@ -286,3 +286,39 @@ T.test("REAL: an empty (fluidless) infected pipe does not spread", {
       "an empty (fluidless) infected pipe must NOT spread to its neighbour")
   end },
 })
+
+-- =====================================================================
+-- H. Storage tanks propagate too (R: tanks/pumps spread). A fluid-filled tank,
+--    once infected, must spread to the pipes connected to it — proving the
+--    get_fluid_box_neighbours path works for multi-tile conduits, not just pipes.
+-- =====================================================================
+T.test("REAL: an infected fluid-filled storage tank spreads to connected pipes", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 14)
+    set_ticks(36000)
+    t.tank = t.world.place(t.surface, "storage-tank", o)  -- 3x3 centred at o
+    -- Ring the tank with pipes so at least one sits on a real fluid connection point
+    -- (we don't hard-code the tank's exact connection offsets).
+    t.pipes = {}
+    local ring = { { 0, -2 }, { 2, 0 }, { 0, 2 }, { -2, 0 },
+                   { -1, -2 }, { 1, -2 }, { -1, 2 }, { 1, 2 },
+                   { -2, -1 }, { -2, 1 }, { 2, -1 }, { 2, 1 } }
+    for _, d in ipairs(ring) do
+      local p = t.world.place(t.surface, "pipe", { x = o.x + d[1], y = o.y + d[2] })
+      if p then t.pipes[#t.pipes + 1] = p end
+    end
+    t.tank.insert_fluid { name = "water", amount = 2000 }
+    bite(t.tank)
+  end,
+  { after = 3, fn = function(t)
+    t.assert.is_true(is_infected(t.tank), "tank infected by the bite")
+  end },
+  { after = 150, fn = function(t)
+    local any = false
+    for _, p in ipairs(t.pipes) do
+      if p.valid and is_infected(p) then any = true; break end
+    end
+    t.assert.is_true(any, "an infected fluid-filled tank spread to a connected pipe")
+  end },
+})

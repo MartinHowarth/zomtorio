@@ -48,10 +48,14 @@ T.test("an active mover spreads infection from an infected source to its dest", 
     local o = t.test_origin
     t.world.clear(t.surface, o)
     -- source chest -> inserter -> dest chest, laid out so pickup/drop resolve.
+    -- A BURNER inserter (fuelled with coal) so it is genuinely powered/operational
+    -- without an electric network — the mover-activity gate now requires power
+    -- (R-CONT-1), so a fake unpowered hand no longer counts as transferring.
     t.source = t.world.place(t.surface, "steel-chest", { x = o.x - 1, y = o.y })
-    t.ins    = t.world.place(t.surface, "inserter", { x = o.x, y = o.y },
+    t.ins    = t.world.place(t.surface, "burner-inserter", { x = o.x, y = o.y },
                              { direction = defines.direction.west })
     t.dest   = t.world.place(t.surface, "steel-chest", { x = o.x + 1, y = o.y })
+    t.world.insert(t.ins, "coal", 50)   -- fuel it so it's powered
     -- Stage items so the inserter actually picks up and swings (gives valid
     -- pickup/drop targets), then we also hand-arm it for determinism.
     t.world.insert(t.source, "iron-plate", 50)
@@ -148,6 +152,33 @@ T.test("an empty belt does not spread (presence gate)", {
   end },
 })
 
+-- ----------------------------------------------- unpowered mover (R-CONT-1 bug)
+-- Regression: an ELECTRIC inserter with NO power, frozen mid-swing with an item in
+-- hand, must NOT spread — power-off means it isn't actually transferring. (Before
+-- the fix, held_stack alone counted as "active" and it infected itself + its dest.)
+T.test("an unpowered inserter holding an item does not spread (R-CONT-1)", {
+  function(t)
+    reset()
+    local o = t.test_origin
+    t.world.clear(t.surface, o)
+    t.source = t.world.place(t.surface, "steel-chest", { x = o.x - 1, y = o.y })
+    t.ins    = t.world.place(t.surface, "inserter", { x = o.x, y = o.y },
+                             { direction = defines.direction.west })  -- electric, unpowered
+    t.dest   = t.world.place(t.surface, "steel-chest", { x = o.x + 1, y = o.y })
+    contagion.on_built { entity = t.ins }
+    infection.infect(t.source)
+    arm_inserter(t.ins)               -- force a held item despite having no power
+  end,
+  { after = 5, fn = function(t)
+    arm_inserter(t.ins)               -- keep the hand full at the sampled tick
+    tick_contagion()
+    t.assert.is_false(infection.is_infected(t.ins),
+      "an unpowered inserter must not infect itself")
+    t.assert.is_false(infection.is_infected(t.dest),
+      "an unpowered inserter must not infect its destination (R-CONT-1)")
+  end },
+})
+
 -- ---------------------------------------------------------- throttle (R-CONT-7)
 -- Register many eligible movers, set a small budget, run ONE tick: only ~budget
 -- movers can act, so NOT all destinations get infected in a single tick. This
@@ -163,9 +194,10 @@ T.test("the per-tick budget bounds how much spread happens in one tick", {
     for i = 1, t.n do
       local y = o.y + i
       local src = t.world.place(t.surface, "steel-chest", { x = o.x - 1, y = y })
-      local ins = t.world.place(t.surface, "inserter", { x = o.x, y = y },
+      local ins = t.world.place(t.surface, "burner-inserter", { x = o.x, y = y },
                                 { direction = defines.direction.west })
       local dst = t.world.place(t.surface, "steel-chest", { x = o.x + 1, y = y })
+      t.world.insert(ins, "coal", 50)   -- fuel it so it's powered (activity gate)
       contagion.on_built { entity = ins }
       infection.infect(src)             -- every source infected -> all eligible
       arm_inserter(ins)                 -- every inserter active

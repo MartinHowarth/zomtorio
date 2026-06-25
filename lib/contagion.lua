@@ -205,29 +205,44 @@ end
 
 --------------------------------------------------------------------- mover step
 
+-- A mover with no energy is NOT transferring, even if it sits frozen mid-swing
+-- with an item still in hand: R-CONT-1 spreads only on ACTIVE transfer. The engine
+-- reports this as a status, so gate on it — an unpowered inserter (no_power) or an
+-- unfuelled burner one (no_fuel) can't spread. (low_power is left OUT: a browning-out
+-- mover is still slowly transferring.)
+local NONOPERATIONAL_STATUS = {
+  [defines.entity_status.no_power] = true,
+  [defines.entity_status.no_fuel]  = true,
+}
+
+local function powered(m)
+  return not NONOPERATIONAL_STATUS[m.status]
+end
+
 --- Resolve a mover's transfer: returns active, source, dest.
----   * inserter: active iff its hand carries an item; pickup/drop targets.
+---   * inserter: active iff powered AND its hand carries an item; pickup/drop targets.
 ---   * mining-drill: active iff status==working; source is ore (never infected),
 ---     so a drill only spreads when the DRILL ITSELF is infected; drop_target dest.
 ---   * loader / loader-1x1: best-effort. loader_type "input" feeds the belt FROM
 ---     the container (source=container, dest=the connected belt); "output" feeds
----     the container FROM the belt (source=belt, dest=container). active iff its
----     transport lines carry items. NOTE: the belt side is read via belt_neighbours
----     rather than a dedicated accessor, which is a simplification — inserters and
----     drills are the priority vectors; loaders are handled simply.
+---     the container FROM the belt (source=belt, dest=container). active iff powered
+---     AND its transport lines carry items. NOTE: the belt side is read via
+---     belt_neighbours rather than a dedicated accessor, which is a simplification —
+---     inserters and drills are the priority vectors; loaders are handled simply.
 local function resolve_mover(m)
   local t = m.type
   if t == "inserter" then
     local hs = m.held_stack
-    local active = hs and hs.valid_for_read or false
+    local active = powered(m) and hs and hs.valid_for_read or false
     return active, m.pickup_target, m.drop_target
   elseif t == "mining-drill" then
     local active = m.status == defines.entity_status.working
     return active, nil, m.drop_target  -- source is ore: never infected
   elseif t == "loader" or t == "loader-1x1" then
-    -- Presence on the loader's own transport lines == carrying.
+    -- Presence on the loader's own transport lines == carrying, but only while powered.
     local active = false
-    local n = m.get_max_transport_line_index and m.get_max_transport_line_index() or 0
+    local n = (powered(m) and m.get_max_transport_line_index)
+      and m.get_max_transport_line_index() or 0
     for i = 1, n do
       local line = m.get_transport_line(i)
       if line and line.get_item_count() > 0 then active = true; break end

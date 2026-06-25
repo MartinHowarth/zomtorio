@@ -58,15 +58,20 @@ T.test("night swaps a nearby enemy unit to its faster night variant", {
       { x = t.test_origin.x + 6, y = t.test_origin.y }, { force = "enemy" })
   end,
   { after = 5, fn = function(t)
-    -- The mod's own night.on_tick is also live in the harness, so we assert the
-    -- END state (variant) after forcing a sweep rather than the pre-sweep state.
     night.sweep_now()
-  end },
-  { after = 5, fn = function(t)
-    local u = enemy_near(t.surface, t.test_origin)
-    t.assert.not_nil(u, "the (swapped) enemy unit should still exist")
-    t.assert.is_true(night.is_night_variant(u.name),
-      "a nearby enemy unit should be swapped to its night variant at night")
+    -- Assert immediately (same step) that a night variant now exists nearby, so
+    -- the result can't be perturbed by the live mod's later spawns/movement.
+    local found = t.surface.find_entities_filtered {
+      type = "unit", force = "enemy", position = t.test_origin, radius = 16,
+    }
+    local variant, names = nil, {}
+    for _, u in pairs(found) do
+      names[#names + 1] = u.name
+      if night.is_night_variant(u.name) then variant = u; break end
+    end
+    t.assert.not_nil(variant,
+      "a nearby enemy unit should be swapped to its night variant at night" ..
+      " [enemies={" .. table.concat(names, ",") .. "}]")
   end },
 })
 

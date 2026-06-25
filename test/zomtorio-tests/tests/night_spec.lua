@@ -109,8 +109,10 @@ T.test("the night variant out-travels the day unit under attack (R-NIGHT-1)", {
     local d_day   = t.day.valid   and dist(t.day.position, t.day_start)     or 0
     local d_night = t.night.valid and dist(t.night.position, t.night_start) or 0
     -- The variant should clearly out-travel the day unit; with the default +100%
-    -- it covers ~2x. Conservative margin keeps it robust against AI noise.
-    t.assert.at_least(d_day + 3.0, d_night,
+    -- it covers ~2x. A PROPORTIONAL margin (>= 1.4x) keeps this robust against AI
+    -- noise AND against the S10 dense-swarm speed/4 tuning, which shrinks the
+    -- absolute distances so a fixed additive margin no longer fits the window.
+    t.assert.at_least(d_day * 1.4, d_night,
       string.format("night variant should out-travel day unit (day=%.2f night=%.2f)", d_day, d_night))
   end },
 })

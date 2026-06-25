@@ -273,10 +273,23 @@ end
 
 --- Process up to `count` belts from the frontier cursor. Returns the number
 --- examined (charged against the budget).
+---
+--- An infected belt is a PERSISTENT source while it stays infected (R-CONT-4):
+--- after it spreads we re-arm its travel-time timer rather than dropping it, so
+--- it keeps infecting belts that are built (or cured-then-reinfected) downstream
+--- LATER — not just the neighbours present on the first pass. (Dropping after one
+--- spread was a bug: extending an infected line, or a belt that spread before its
+--- downstream had items, would never infect the new/late belt.) Re-infecting an
+--- already-infected neighbour is an idempotent no-op, and the re-armed timer stops
+--- a belt being processed twice in the same sweep. Only invalid or cured belts
+--- leave the frontier. Per-tick work stays bounded by the budget (R-CONT-7).
 local function sweep_belts(c, count, now)
   local belts = c.belts
   local key = c.belt_cursor
   local done = 0
+  -- Infecting downstream mutates `belts` (via the on_infected listener), which is
+  -- undefined to do mid-next(); collect the belts to spread and do it after the walk.
+  local to_spread
   while done < count do
     local un, rec = next(belts, key)
     if un == nil then
@@ -296,8 +309,9 @@ local function sweep_belts(c, count, now)
     elseif not belt_has_items(e) then
       rec.spread_at = now + BELT_RECHECK              -- empty: re-arm (R-CONT-2)
     else
-      spread_belt_downstream(e)
-      remove = true                                   -- spread once; job done
+      to_spread = to_spread or {}
+      to_spread[#to_spread + 1] = e
+      rec.spread_at = now + belt_delay(e)             -- spread + re-arm (persistent)
     end
 
     if remove then
@@ -308,6 +322,12 @@ local function sweep_belts(c, count, now)
     done = done + 1
   end
   c.belt_cursor = key
+
+  if to_spread then
+    for _, e in ipairs(to_spread) do
+      if e.valid then spread_belt_downstream(e) end
+    end
+  end
   return done
 end
 

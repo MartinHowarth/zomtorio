@@ -167,3 +167,73 @@ T.test("REAL: an idle / unpowered section does not spread infection", {
       "an itemless infected belt must NOT spread downstream (presence gate)")
   end },
 })
+
+-- =====================================================================
+-- D. Long chain: infection must propagate ALL the way down, not just one hop
+--    (catches the "worked once but stopped" report). 6 belts fed by a powered
+--    inserter from an infected chest; the tail belt must end up infected.
+-- =====================================================================
+T.test("REAL: contagion propagates down a long (6-belt) chain to the end", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 18)
+    set_ticks(36000)  -- keep everything alive while it propagates
+    t.world.power_region(t.surface, { x = o.x + 3, y = o.y })
+    t.chest = t.world.place(t.surface, "steel-chest", { x = o.x - 1, y = o.y })
+    t.world.insert(t.chest, "iron-plate", 500)
+    t.ins = t.world.place(t.surface, "inserter", { x = o.x, y = o.y },
+                          { direction = defines.direction.west })
+    t.belts = t.world.belt_line(t.surface, { x = o.x + 1, y = o.y },
+                                defines.direction.east, 6, "transport-belt")
+  end,
+  { after = 90, fn = function(t)
+    t.assert.is_true(t.ins.energy and t.ins.energy > 0, "inserter powered")
+    bite(t.chest)
+    t.assert.is_true(is_infected(t.chest), "chest infected by bite")
+  end },
+  -- Each yellow-belt hop is ~16 ticks; 6 belts + the mover step settle well
+  -- inside this window.
+  { after = 600, fn = function(t)
+    t.assert.is_true(is_infected(t.belts[1]), "belt1 infected (head)")
+    t.assert.is_true(is_infected(t.belts[3]), "belt3 infected (mid chain)")
+    t.assert.is_true(is_infected(t.belts[6]),
+      "belt6 infected — infection reached the END of the chain")
+  end },
+})
+
+-- =====================================================================
+-- E. A belt built downstream AFTER the upstream belt was already infected must
+--    still get infected (R-CONT-4: a belt is a persistent source until cured/
+--    dead, not a one-shot spreader). This is the "didn't continue / didn't work
+--    a second time" case: extend an infected line and the extension must catch.
+-- =====================================================================
+T.test("REAL: a belt added downstream after infection still gets infected", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 16)
+    set_ticks(36000)
+    t.world.power_region(t.surface, { x = o.x + 2, y = o.y })
+    t.chest = t.world.place(t.surface, "steel-chest", { x = o.x - 1, y = o.y })
+    t.world.insert(t.chest, "iron-plate", 500)
+    t.ins = t.world.place(t.surface, "inserter", { x = o.x, y = o.y },
+                          { direction = defines.direction.west })
+    -- Start with a SHORT line (just belt1).
+    t.belts = t.world.belt_line(t.surface, { x = o.x + 1, y = o.y },
+                                defines.direction.east, 1, "transport-belt")
+  end,
+  { after = 90, fn = function(t)
+    bite(t.chest)
+  end },
+  -- belt1 is infected and has items but (so far) no downstream neighbour.
+  { after = 240, fn = function(t)
+    t.assert.is_true(is_infected(t.belts[1]), "belt1 infected before extension")
+    -- NOW extend the line: build belt2 downstream of belt1.
+    t.belt2 = t.world.place(t.surface, "transport-belt", { x = t.belts[1].position.x + 1,
+                            y = t.belts[1].position.y }, { direction = defines.direction.east })
+  end },
+  -- The already-infected belt1 must spread onto the newly-built belt2.
+  { after = 240, fn = function(t)
+    t.assert.is_true(is_infected(t.belt2),
+      "belt built downstream AFTER infection got infected (R-CONT-4 persistent source)")
+  end },
+})

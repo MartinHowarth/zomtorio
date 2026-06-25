@@ -50,17 +50,32 @@ T.test("is_night is true at midnight and false at noon (R-NIGHT-1)", {
 ------------------------------------------------- night swaps to the fast variant
 
 T.test("night swaps a nearby enemy unit to its faster night variant", {
+  -- Step 1: just settle darkness. surface.darkness eases toward the daytime-implied
+  -- value over many ticks (and from a starting point set by the previous test), so
+  -- a fixed short wait is unreliable across suite orderings — wait, then assert it
+  -- has actually crossed the night threshold in step 2.
   function(t)
-    t.world.clear(t.surface, t.test_origin, 12)
     set_midnight(t.surface)
-    t.char  = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+  end,
+  { after = 90, fn = function(t)
+    t.assert.is_true(night.is_night(t.surface),
+      "precondition: darkness has settled to night (darkness=" ..
+      string.format("%.2f", t.surface.darkness) .. ")")
+
+    -- Build the scene and sweep ATOMICALLY within this one step (a single tick, a
+    -- single synchronous function) so the live mod — which also runs a night sweep
+    -- and cranks enemy generation — cannot race us: clear any stray live enemy,
+    -- place a fresh anchor + a fresh biter, sweep, and assert, all before control
+    -- returns to the engine. A biter placed microseconds before the sweep can't be
+    -- destroyed or duplicated by the live mod mid-function.
+    t.world.clear(t.surface, t.test_origin, 12)
+    local char = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+    char.destructible = false
     t.world.place(t.surface, "small-biter",
       { x = t.test_origin.x + 6, y = t.test_origin.y }, { force = "enemy" })
-  end,
-  { after = 5, fn = function(t)
+
     night.sweep_now()
-    -- Assert immediately (same step) that a night variant now exists nearby, so
-    -- the result can't be perturbed by the live mod's later spawns/movement.
+
     local found = t.surface.find_entities_filtered {
       type = "unit", force = "enemy", position = t.test_origin, radius = 16,
     }

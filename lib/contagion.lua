@@ -53,10 +53,6 @@ local MAX_FLUIDBOXES = 8
 -- use a short fixed travel time before an infected pipe spreads to its neighbours.
 local PIPE_DELAY = 15
 
--- A pump services a fluid wagon stopped beside it, but that link is not exposed by any
--- fluidbox API, so an infected pump finds its wagon by proximity within this radius.
-local PUMP_WAGON_RADIUS = 3
-
 -- Fixed per-tick work budget (R-CONT-7): at most this many spread-checks total
 -- across BOTH vectors each tick, regardless of how big the world is. Exceeding
 -- it just spreads the work over more ticks. Tunable; a test override exists.
@@ -368,18 +364,29 @@ local function spread_pipe_all(conduit)
       end
     end
   end
-  -- Pump <-> fluid-wagon: the wagon transfer is NOT a fluidbox connection — the wagon
-  -- shows up in NEITHER get_fluid_box_pipe_connections NOR get_fluid_box_neighbours of
-  -- the pump (verified in-game). So detect the serviced wagon geometrically: infect any
-  -- fluid-wagon within the pump's short connection reach. Cheap (tiny-area find, pumps
-  -- are few and this is throttled), and direction-agnostic — like an inserter infecting
-  -- a cargo wagon whether loading or unloading. A non-rail pump simply finds none.
+  -- Pump <-> fluid-wagon: the transfer is NOT a fluidbox connection (the wagon shows
+  -- in NEITHER get_fluid_box_pipe_connections NOR get_fluid_box_neighbours — verified
+  -- in-game). But a pump DOES report the rails it services via pump_input_rail_targets
+  -- / pump_output_rail_targets (2.1.7+); the serviced fluid wagon is the one sitting on
+  -- one of those rails. Precise (only the actual serviced rail), and direction-agnostic
+  -- (a wagon loaded via the output rail or drained via the input rail both count), like
+  -- an inserter infecting a cargo wagon either way. pcall-guarded so older 2.1 (without
+  -- these members) degrades gracefully to no wagon spread.
   if conduit.type == "pump" then
-    local wagons = conduit.surface.find_entities_filtered {
-      type = "fluid-wagon", position = conduit.position, radius = PUMP_WAGON_RADIUS,
-    }
-    for _, w in pairs(wagons) do
-      if w.valid then infection.infect(w) end
+    for _, prop in ipairs({ "pump_input_rail_targets", "pump_output_rail_targets" }) do
+      local ok, rails = pcall(function() return conduit[prop] end)
+      if ok and type(rails) == "table" then
+        for _, rail in pairs(rails) do
+          if rail and rail.valid then
+            local wagons = conduit.surface.find_entities_filtered {
+              area = rail.bounding_box, type = "fluid-wagon",
+            }
+            for _, w in pairs(wagons) do
+              if w.valid then infection.infect(w) end
+            end
+          end
+        end
+      end
     end
   end
 end

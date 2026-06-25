@@ -448,11 +448,12 @@ T.test("REAL: an infected machine spreads downstream but not into its input pipe
 })
 
 -- =====================================================================
--- L. An infected pump infects the fluid wagon beside it. The pump<->wagon transfer
---    isn't a fluidbox connection (the wagon shows in no fluid API), so we detect it
---    by proximity — which doesn't need a real train connection, so it's testable here.
+-- L. An infected pump infects the fluid wagon it services. The pump<->wagon transfer
+--    isn't a fluidbox connection, so we find the wagon via the pump's rail targets
+--    (pump_*_rail_targets) — a wagon on a serviced rail, no real train needed, so it's
+--    testable headless.
 -- =====================================================================
-T.test("REAL: an infected pump infects an adjacent fluid wagon", {
+T.test("REAL: an infected pump infects the fluid wagon on its serviced rail", {
   function(t)
     local o = t.test_origin
     t.world.clear(t.surface, o, 16)
@@ -463,17 +464,18 @@ T.test("REAL: an infected pump infects an adjacent fluid wagon", {
     end
     t.wagon = t.surface.create_entity { name = "fluid-wagon", position = { x = o.x, y = o.y },
       direction = defines.direction.east, force = "player" }
-    local wp = t.wagon.position
-    -- A pump within PUMP_WAGON_RADIUS of the wagon, holding fluid (so it spreads).
-    t.pump = t.world.place(t.surface, "pump", { x = wp.x, y = wp.y + 2 })
+    -- A pump beside the rail line (so it has a rail target onto the wagon's rail),
+    -- holding fluid so it spreads.
+    t.pump = t.world.place(t.surface, "pump", { x = o.x, y = o.y + 2 },
+                           { direction = defines.direction.north })
     if t.pump then t.pump.insert_fluid { name = "water", amount = 100 }; bite(t.pump) end
   end,
   { after = 3, fn = function(t)
-    t.assert.not_nil(t.pump, "pump placed near the wagon")
+    t.assert.not_nil(t.pump, "pump placed beside the rail")
     t.assert.is_true(is_infected(t.pump), "pump infected by the bite")
   end },
   { after = 150, fn = function(t)
     t.assert.is_true(t.wagon.valid and is_infected(t.wagon),
-      "an infected pump infected the fluid wagon beside it")
+      "an infected pump infected the fluid wagon on its serviced rail")
   end },
 })

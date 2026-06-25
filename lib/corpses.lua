@@ -10,6 +10,7 @@
 
 local planets = require("lib.planets")
 local tiers   = require("lib.tiers")
+local melee   = require("lib.melee")
 local util    = require("lib.util")
 
 local corpses = {}
@@ -57,8 +58,11 @@ function corpses.on_entity_died(event)
   if not util.is_enemy_force(e.force) then return end
   if tiers.HORDE_TO_TIER[e.name] ~= nil then return end  -- a cluster, not an individual
 
+  -- A double-tap melee kill is dead-dead: no corpse, so it can't reanimate
+  -- (R-MELEE-5). Melee types are otherwise NOT no-corpse — they drop normally.
+  local no_corpse = melee.is_dead_dead(event)
   local dtype = event.damage_type and event.damage_type.name
-  corpses.drop(e.surface, e.position, 1, dtype)
+  corpses.drop(e.surface, e.position, 1, dtype, no_corpse)
 end
 
 return corpses

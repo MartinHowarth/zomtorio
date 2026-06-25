@@ -18,13 +18,16 @@
 local config  = require("lib.config")
 local tiers   = require("lib.tiers")
 local corpses = require("lib.corpses")
+local melee   = require("lib.melee")
 local util    = require("lib.util")
 
 local horde = {}
 
--- Damage types that multi-kill in a swarm (R-HORDE-5). The S8 "zombie-melee"
--- damage type joins this set once melee upgrades land.
-local MULTI_KILL_TYPES = { explosion = true }
+-- Damage types that multi-kill in a swarm (R-HORDE-5). "explosion" is the
+-- explosive rule; "zomtorio-swarm-melee" is the S8 tech-gated swarm-melee AoE
+-- (lib/melee). The BASE punch "zomtorio-zombie-melee" is deliberately ABSENT:
+-- unupgraded melee kills exactly one (R-MELEE-1).
+local MULTI_KILL_TYPES = { explosion = true, ["zomtorio-swarm-melee"] = true }
 
 -- A burst (R-HORDE-4) only triggers when a character is within this radius, so
 -- abstract clusters only "become real" near a player who'd actually see them.
@@ -187,6 +190,10 @@ function horde.on_entity_damaged(event)
 
   local surface, pos, force = entity.surface, entity.position, entity.force
 
+  -- Double-tap (R-MELEE-5): a melee kill while double-tap is on is dead-dead, so
+  -- the killed population leaves no corpse — same rule as for individual zombies.
+  local no_corpse = melee.is_dead_dead(event)
+
   -- Burst: cap has room AND a player is near -> the cluster becomes real. The
   -- killed zombies are gone; the survivors spawn as individuals (R-HORDE-4).
   if cap_room() > 0 and character_near(surface, pos) then
@@ -196,15 +203,15 @@ function horde.on_entity_damaged(event)
     if survivors > 0 then
       horde.spawn(surface, pos, survivors, tier, force)
     end
-    -- The zombies the hit killed drop corpses (skipped for flame/explosion); a
-    -- hit can't kill more than the cluster held.
-    corpses.drop(surface, pos, math.min(kills, rec.pop), dtype)
+    -- The zombies the hit killed drop corpses (skipped for flame/explosion/
+    -- double-tap); a hit can't kill more than the cluster held.
+    corpses.drop(surface, pos, math.min(kills, rec.pop), dtype, no_corpse)
     return
   end
 
   -- Otherwise lose population. The script is the only thing that kills the unit.
   -- Corpses dropped = zombies ACTUALLY removed (a hit can't kill more than the
-  -- cluster holds), skipped for flame/explosion (R-CORPSE-4).
+  -- cluster holds), skipped for flame/explosion (R-CORPSE-4) / double-tap.
   local removed = math.min(kills, rec.pop)
   rec.pop = rec.pop - kills
   if rec.pop <= 0 then
@@ -213,7 +220,7 @@ function horde.on_entity_damaged(event)
   else
     entity.health = pop_health(entity, rec.pop, tier)
   end
-  corpses.drop(surface, pos, removed, dtype)
+  corpses.drop(surface, pos, removed, dtype, no_corpse)
 end
 
 --- Idempotent removal from our bookkeeping. Safe to call from several remove

@@ -46,10 +46,11 @@ script.on_event(defines.events.on_tick, function(event)
 end)
 
 ------------------------------------------------------------------- damage
--- NOTE: currently UNFILTERED — dispatched for every hit in the game. Each module
--- early-outs cheaply (a type/name/validity check before any work), so this is
--- acceptable; a LuaEntityDamagedEventFilter is evaluated in S8 once melee fixes
--- the full set of entities we actually care about.
+-- NOTE: intentionally UNFILTERED. The three consumers between them care about a
+-- broad span of damaged entities (horde units, every infectable building/robot/
+-- character, and every enemy unit for melee), so a LuaEntityDamagedEventFilter
+-- union would exclude little. Each module early-outs cheaply (one type/name/
+-- validity check before any work), which is the real safeguard against per-hit cost.
 script.on_event(defines.events.on_entity_damaged, function(event)
   infection.on_entity_damaged(event)
   horde.on_entity_damaged(event)
@@ -98,6 +99,12 @@ end
 ------------------------------------------------------------------- shortcuts
 script.on_event(defines.events.on_lua_shortcut, function(event)
   melee.on_toggle_shortcut(event)
+end)
+
+------------------------------------------------------------------- research
+-- Unlock the double-tap shortcut for a force once the melee tech is researched.
+script.on_event(defines.events.on_research_finished, function(event)
+  melee.on_research_finished(event)
 end)
 
 ------------------------------------------------------------------- settings

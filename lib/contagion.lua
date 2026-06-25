@@ -339,6 +339,13 @@ function contagion.set_budget_override(n)
   budget_override = n
 end
 
+--- Debug/test accessor: sizes of the mover registry and belt frontier (real mod
+--- state), for diagnosing where a contagion chain stalls.
+function contagion.debug_counts()
+  local c = state()
+  return { movers = table_size(c.movers), belts = table_size(c.belts) }
+end
+
 --- Test-only: hard-reset all bookkeeping. Production on_init is idempotent
 --- (preserves live state across a config change); tests that need a clean slate
 --- call this instead. Does NOT touch the (module-local) listener registration.

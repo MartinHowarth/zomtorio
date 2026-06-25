@@ -63,6 +63,26 @@ function world.belt_line(surface, start, direction, length, name)
   return belts
 end
 
+--- Blanket an area with real electric power: a substation (large supply area)
+--- fed by an electric-energy-interface acting as an infinite generator. Returns
+--- the substation, which powers electric entities within ~9 tiles of `center`.
+--- Place the substation/EEI off to the side (north) so they don't collide with
+--- the factory being tested. Real power matters: an unpowered inserter never
+--- swings, so contagion's activity gate (R-CONT-3) can only be exercised for real
+--- if the powered case actually has power.
+function world.power_region(surface, center)
+  local sub = world.place(surface, "substation", { x = center.x, y = center.y - 7 })
+  local eei = world.place(surface, "electric-energy-interface",
+                          { x = center.x + 3, y = center.y - 7 })
+  if eei then
+    eei.electric_buffer_size = 1e15
+    eei.power_production = 1e12
+    eei.power_usage = 0
+    eei.energy = 1e15
+  end
+  return sub, eei
+end
+
 function world.insert(entity, name, count)
   return entity.insert { name = name, count = count or 1 }
 end

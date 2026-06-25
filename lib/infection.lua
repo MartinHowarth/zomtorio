@@ -472,6 +472,11 @@ function infection.reset_state()
   storage.zomtorio.player_infection = { records = {}, health = {} }
 end
 
+--- Debug/test accessor: number of currently-infected buildings (real mod state).
+function infection.debug_infected_count()
+  return table_size(state().infected)
+end
+
 --- Test helper: does this entity's infected record have a live alt-mode marker?
 function infection.has_marker(entity)
   if not (entity and entity.valid and entity.unit_number) then return false end

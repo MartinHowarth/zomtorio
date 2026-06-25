@@ -123,3 +123,25 @@ end)
 script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
   swarm.on_runtime_setting_changed(event)
 end)
+
+------------------------------------------------------------------- debug remote
+-- A tiny introspection interface so the (separate) test harness mod can observe
+-- THIS mod's real runtime state and effects. A test that `require`s our lib files
+-- gets its own private copy of each module with its own `storage`, so it can never
+-- see what the live mod actually infected — it must ask across the mod boundary.
+-- remote.call is an in-process call (LuaEntity args pass by reference), so the
+-- handlers operate on the real mod's storage. Registered at script load so it
+-- exists after every load, not only on_init.
+remote.add_interface("zomtorio-debug", {
+  -- Is this entity in the live building-infection set?
+  is_infected = function(entity) return infection.is_infected(entity) end,
+  -- Is this character in the live player-infection set?
+  is_player_infected = function(character) return infection.is_player_infected(character) end,
+  -- Size of the live infected-building set.
+  infected_count = function() return infection.debug_infected_count() end,
+  -- { movers=, belts= } sizes of the live contagion registry/frontier.
+  contagion_counts = function() return contagion.debug_counts() end,
+  -- Override the live time-to-death (ticks) so tests can drive a fast DoT; nil
+  -- restores the configured setting.
+  set_infection_ticks = function(n) infection.set_ticks_override(n) end,
+})

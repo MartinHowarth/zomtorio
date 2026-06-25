@@ -1,14 +1,19 @@
--- S6 tests: infection contagion — spread along the flow of goods
--- (R-CONT-1..7, R-SCOPE-1). Loads the real modules from the linked main mod via
--- the __zomtorio__ require path; the contagion + infection instances loaded here
--- share this mod's `storage`, so a test can infect/register and then assert via
--- infection.is_infected.
+-- S6 WHITE-BOX UNIT tests: the contagion spread ALGORITHM (R-CONT-1..7).
 --
--- We drive contagion.on_tick / on_built / on_removed DIRECTLY. To make an
--- inserter ACTIVE deterministically we force an item into its hand with
--- held_stack.set_stack; where that is awkward we drive the mover rule with the
--- mover already infected (the spec says either an infected source OR an infected
--- mover spreads).
+-- IMPORTANT — what these are and are NOT. `require("__zomtorio__.lib.contagion")`
+-- loads a SEPARATE private copy of the module into THIS (test) mod's Lua VM with
+-- its own `storage`; it is NOT the live mod's instance. So these tests drive
+-- contagion.on_tick / on_built / on_removed by hand and fake mover activity
+-- (held_stack.set_stack) / belt contents to verify the spread LOGIC deterministically
+-- and fast: belt travel-time topology, the presence gate, the per-tick throttle,
+-- conduit death. They prove the algorithm is correct in isolation.
+--
+-- They do NOT prove the live mod actually spreads in real play — faking activity
+-- and calling on_tick manually sidesteps real power, real inserter swings, the live
+-- per-tick sweep, and the real DoT. That integration is proven separately, against
+-- the LIVE mod (real power, real item flow, real enemy bites, live on_tick, and a
+-- negative idle/unpowered case), in contagion_real_spec.lua. Keep both: these for
+-- fast algorithm coverage, that one for real-play truth.
 
 local T         = require("harness.runner")
 local contagion = require("__zomtorio__.lib.contagion")

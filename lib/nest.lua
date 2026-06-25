@@ -79,16 +79,16 @@ local function nest_budget(surface, pos)
   return base + (maxb - base) * frac
 end
 
---- Total population of tracked clusters (all tiers) within NEST_RADIUS of `pos`.
+--- Total population of tracked clusters within NEST_RADIUS of `pos`, counting both
+--- the day and night cluster forms (HORDE_ALL) so the measurement isn't fooled at
+--- night when nearby swarms have been swapped to their night variant.
 local function local_swarm_pop(surface, pos)
+  local found = surface.find_entities_filtered {
+    name = tiers.HORDE_ALL, position = pos, radius = NEST_RADIUS,
+  }
   local total = 0
-  for _, hname in pairs(tiers.HORDE) do
-    local found = surface.find_entities_filtered {
-      name = hname, position = pos, radius = NEST_RADIUS,
-    }
-    for _, u in ipairs(found) do
-      total = total + (horde.pop_of(u) or 0)
-    end
+  for _, u in ipairs(found) do
+    total = total + (horde.pop_of(u) or 0)
   end
   return total
 end

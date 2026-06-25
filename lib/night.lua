@@ -35,9 +35,9 @@ local night = {}
 -- darkness == 0.0, at midnight darkness == 0.85 on Nauvis.
 local NIGHT_THRESHOLD = 0.5
 
--- Suffix that turns a day enemy prototype into its faster night variant. MUST
--- match prototypes/night.lua.
-local NIGHT_SUFFIX = "-zomtorio-night"
+-- Suffix that turns a day enemy prototype into its faster night variant. Shared
+-- with the data stage via tiers so the two never drift.
+local NIGHT_SUFFIX = tiers.NIGHT_SUFFIX
 
 -- Throttle: run the sweep only every Nth tick (cheap on the other ticks).
 local SWEEP_PERIOD = 30
@@ -128,18 +128,21 @@ function night.on_tick(event)
         position = char.position, radius = SWEEP_RADIUS,
       }
       for _, u in pairs(units) do
-        -- Never swap a horde-unit cluster: its population lives in storage keyed
-        -- by unit_number, and a swap would orphan that record. (Clusters have no
-        -- night variant today, so this is also belt-and-braces future-proofing.)
-        if u.valid and not tiers.HORDE_TO_TIER[u.name] then
+        if u.valid then
           local target = night_now and night_variant_of(u.name) or day_form_of(u.name)
           if target then
-            -- Preserve horde cap accounting across the destroy+recreate swap: if
-            -- the old unit was a tracked individual, re-track the replacement so
-            -- the cap count doesn't drift down (see horde.track).
-            local was_tracked = horde.is_tracked(u.unit_number)
-            local new = swap_to(surface, u, target)
-            if was_tracked and new and new.valid then horde.track(new) end
+            if tiers.HORDE_TO_TIER[u.name] then
+              -- A cluster (swarm): swap via horde so its population record (pop,
+              -- health, label) is carried across rather than orphaned.
+              horde.swap_cluster(u, target)
+            else
+              -- An individual: preserve cap accounting across the destroy+recreate
+              -- swap — if it was a tracked individual, re-track the replacement so
+              -- the cap count doesn't drift down (see horde.track).
+              local was_tracked = horde.is_tracked(u.unit_number)
+              local new = swap_to(surface, u, target)
+              if was_tracked and new and new.valid then horde.track(new) end
+            end
           end
         end
       end

@@ -99,7 +99,10 @@ end
 -- swarm it represents. Its max_health is deliberately left alone — lib/horde.lua
 -- relies on the huge headroom set in prototypes/entities.lua to track population —
 -- and so is pollution_to_join_attack (clusters aren't pollution-recruited).
-for _, cluster_name in pairs(tiers.HORDE) do
+-- Both day AND night cluster forms (HORDE_ALL): the night variant was cloned from
+-- the base cluster at the data stage with full speed, so it must get the same /4
+-- here or the night/day ratio (1 + speedup) would balloon.
+for _, cluster_name in pairs(tiers.HORDE_ALL) do
   local cluster = data.raw.unit[cluster_name]
   if cluster then
     if cluster.movement_speed then

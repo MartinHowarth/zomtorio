@@ -254,9 +254,10 @@ function horde.fold(surface, pos, count, tier, force)
 
   local z = state()
 
-  -- Merge into a nearby existing cluster of the same tier if one is tracked.
+  -- Merge into a nearby existing cluster of the same tier if one is tracked. Match
+  -- BOTH the day and night cluster forms so a night-time swarm still merges.
   local nearby = surface.find_entities_filtered {
-    name = tiers.HORDE[tier], position = pos, radius = 8,
+    name = tiers.HORDE_BOTH[tier], position = pos, radius = 8,
   }
   for _, unit in ipairs(nearby) do
     if unit.valid then
@@ -415,6 +416,38 @@ end
 --- variant must be re-tracked or the cap would silently drift down.
 function horde.track(entity)
   track_individual(entity)
+end
+
+--- Swap a CLUSTER entity to another cluster prototype (its day<->night variant),
+--- carrying the population record across so the swarm keeps its pop, health and
+--- label (R-NIGHT for swarms). Used by night.lua: a plain destroy+create would
+--- orphan the storage record keyed by unit_number, so the swap must be done here
+--- where that record lives. Returns the new entity (or nil). No cap impact —
+--- clusters aren't tracked individuals.
+function horde.swap_cluster(old_entity, new_name)
+  if not (old_entity and old_entity.valid) then return nil end
+  local z = state()
+  local old_un = old_entity.unit_number
+  local rec = z.horde[old_un]
+  local surface, pos, force = old_entity.surface, old_entity.position, old_entity.force
+  -- Preserve the active command so a swapped, charging swarm keeps its target.
+  local cmd
+  local ok, cmdable = pcall(function() return old_entity.commandable end)
+  if ok and cmdable and cmdable.valid then cmd = cmdable.command end
+
+  z.horde[old_un] = nil           -- detach the record before destroying the old unit
+  old_entity.destroy()            -- its bound pop label auto-destroys with it
+  local unit = surface.create_entity { name = new_name, position = pos, force = force }
+  if not (unit and unit.valid) then return nil end
+
+  if rec then
+    local newrec = { pop = rec.pop, tier = rec.tier }
+    newrec.label = pop_label(unit, rec.pop)
+    z.horde[unit.unit_number] = newrec
+    unit.health = pop_health(unit, rec.pop, rec.tier)
+  end
+  if cmd then pcall(function() unit.commandable.set_command(cmd) end) end
+  return unit
 end
 
 --------------------------------------------------------------------- test API

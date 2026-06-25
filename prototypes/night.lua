@@ -14,21 +14,28 @@
 -- agree. v1 covers the base vanilla biters (S10 will add the dense zombie
 -- prototypes; this file is structured to clone whatever the day prototypes are).
 
+local tiers = require("lib.tiers")
+
 local speedup = settings.startup["zomtorio-night-speedup"].value or 1.0
 local factor = 1 + speedup
 
 -- Day prototype name -> night variant name. lib/night.lua reads this mapping.
--- Keyed on the vanilla biters/spitters for v1.
+-- Keyed on the vanilla biters/spitters AND the horde-unit clusters (so swarms
+-- speed up at night too, not just loose individuals). The clusters already exist
+-- here because prototypes.entities is required before this file (see data.lua).
 local NIGHT_VARIANTS = {
   "small-biter", "medium-biter", "big-biter", "behemoth-biter",
   "small-spitter", "medium-spitter", "big-spitter", "behemoth-spitter",
 }
+for _, cluster_name in pairs(tiers.HORDE) do
+  NIGHT_VARIANTS[#NIGHT_VARIANTS + 1] = cluster_name
+end
 
 for _, base_name in ipairs(NIGHT_VARIANTS) do
   local base = data.raw.unit[base_name]
   if base then
     local night = table.deepcopy(base)
-    night.name = base_name .. "-zomtorio-night"
+    night.name = base_name .. tiers.NIGHT_SUFFIX
     night.movement_speed = (base.movement_speed or 0.1) * factor
     -- Night variants are an internal swap target, not a separately-spawnable or
     -- map-listed enemy. Hide from selection/listings; keep collision/combat.

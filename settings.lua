@@ -88,6 +88,16 @@ data:extend({
     maximum_value = 100000,
     order = "a-b",
   },
+  -- Bot collection of dropped corpses (Feature B): when on, dropped corpses are
+  -- marked for deconstruction so construction/logistic bots haul them to storage
+  -- (where they still reanimate unless burned/kiln-dried — the intended tension).
+  {
+    type = "bool-setting",
+    name = "zomtorio-bot-collect-corpses",
+    setting_type = "runtime-global",
+    default_value = true,
+    order = "c-c",
+  },
   -- Building infection (R-INF-1).
   {
     type = "bool-setting",

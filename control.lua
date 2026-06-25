@@ -68,6 +68,12 @@ script.on_event(defines.events.on_entity_died, function(event)
   contagion.on_removed(event)  -- a dead entity also leaves the mover registry
 end)
 
+------------------------------------------------------------------- reanimation
+-- A spoiled corpse hatched a zombie; route it through the dynamic cap.
+script.on_event(defines.events.on_trigger_created_entity, function(event)
+  horde.on_trigger_created_entity(event)
+end)
+
 ------------------------------------------------------------------- build/remove
 -- Maintains the contagion mover registry.
 local build_events = {

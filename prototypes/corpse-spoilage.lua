@@ -36,6 +36,11 @@ if corpse and settings.startup["zomtorio-corpse-reanimation"].value then
             affects_target = true,
             show_in_tooltip = true,
             as_enemy = true,                 -- => enemy force, hostile zombie
+            -- Raise on_trigger_created_entity per hatched zombie so the runtime
+            -- can route reanimations through the dynamic cap (R-HORDE-6 /
+            -- R-GEN-6): under-cap ones stay individuals, overflow folds into a
+            -- cluster. See lib/corpses.on_trigger_created_entity.
+            trigger_created_entity = true,
             find_non_colliding_position = true,
             offset_deviation = { { -2, -2 }, { 2, 2 } },
             non_colliding_fail_result = {
@@ -48,6 +53,7 @@ if corpse and settings.startup["zomtorio-corpse-reanimation"].value then
                     entity_name = "small-biter",
                     affects_target = true,
                     as_enemy = true,
+                    trigger_created_entity = true,
                     offset_deviation = { { -1, -1 }, { 1, 1 } },
                   },
                 },

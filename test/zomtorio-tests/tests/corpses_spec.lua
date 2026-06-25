@@ -229,12 +229,153 @@ T.test("a spoiled corpse reanimates into an enemy zombie", {
       t.assert.at_least(1, #biters, "the spoiled corpse hatched an enemy zombie")
     else
       -- Fallback: forcing spoilage unsupported headless. Assert the prototype
-      -- trigger is wired to create an enemy-force small-biter.
+      -- trigger is wired to create an enemy-force small-biter. Read-back shape is
+      -- the runtime SpoilToTriggerResult concept: `trigger` is an array of trigger
+      -- items, each with an array of action_delivery (NOT the flat data-table shape).
       local trig = prototypes.item[CORPSE_ITEM].spoil_to_trigger_result
       t.assert.not_nil(trig, "corpse spoil trigger configured")
-      local eff = trig.trigger.action_delivery.source_effects[1]
+      local item = trig.trigger[1]
+      t.assert.not_nil(item, "trigger has at least one item")
+      local delivery = item.action_delivery[1]
+      t.assert.not_nil(delivery, "trigger item has an action delivery")
+      local eff = delivery.source_effects[1]
       t.assert.equal("small-biter", eff.entity_name, "spoils into a small-biter")
       t.assert.is_true(eff.as_enemy == true, "the hatched zombie is on the enemy force")
     end
   end },
 })
+
+-- ============================================================================
+-- Feature A: reanimation routed through the dynamic cap (R-HORDE-6 / R-GEN-6).
+--
+-- Real spoilage takes ~10 minutes, so we test the interception path by directly
+-- synthesizing the on_trigger_created_entity event the spoilage trigger raises
+-- (trigger_created_entity = true) for each hatched zombie.
+-- ============================================================================
+
+-- A reanimated zombie while the cap has room stays a real individual AND now
+-- counts against the cap (so a pile can't blow past the cap).
+T.test("a reanimated zombie under the cap is tracked as an individual", function(t)
+  horde.reset_state()
+  horde.set_cap_override(1000)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  local biter = t.world.place(t.surface, "small-biter", o, { force = "enemy" })
+
+  horde.on_trigger_created_entity { entity = biter }
+
+  t.assert.is_true(biter.valid, "under-cap reanimation stays a real individual")
+  t.assert.is_true(horde.is_tracked(biter.unit_number), "and now counts against the cap")
+end)
+
+-- When the cap is full the hatched individual is removed and folded into a
+-- cluster; a pile reanimating near the same spot MERGES into one growing cluster.
+T.test("a reanimated zombie over the cap folds into a cluster (and merges)", function(t)
+  horde.reset_state()
+  horde.set_cap_override(0)  -- cap full: everything must fold
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+
+  local b1 = t.world.place(t.surface, "small-biter", o, { force = "enemy" })
+  horde.on_trigger_created_entity { entity = b1 }
+  t.assert.is_false(b1.valid, "over-cap reanimation is removed (folded)")
+
+  local b2 = t.world.place(t.surface, "small-biter", o, { force = "enemy" })
+  horde.on_trigger_created_entity { entity = b2 }
+
+  local clusters = t.surface.find_entities_filtered {
+    name = tiers.HORDE.small, position = o, radius = 16,
+  }
+  local total_pop = 0
+  for _, c in ipairs(clusters) do total_pop = total_pop + (horde.pop_of(c) or 0) end
+  t.assert.equal(1, #clusters, "two reanimations near the same spot merge into one cluster")
+  t.assert.equal(2, total_pop, "the merged cluster holds both folded zombies")
+end)
+
+-- horde.fold merges into a nearby existing cluster of the same tier and applies
+-- NO horde-size multiplier (overflow is not a fresh generation source).
+T.test("horde.fold merges into a nearby cluster without multiplier", function(t)
+  horde.reset_state()
+  horde.set_cap_override(0)
+  horde.set_size_multiplier_override(10)  -- would 10x if fold wrongly applied it
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+
+  horde.fold(t.surface, o, 3, "small", "enemy")
+  horde.fold(t.surface, { x = o.x + 2, y = o.y }, 2, "small", "enemy")
+
+  local clusters = t.surface.find_entities_filtered {
+    name = tiers.HORDE.small, position = o, radius = 16,
+  }
+  t.assert.equal(1, #clusters, "the second fold merged into the first cluster")
+  t.assert.equal(5, horde.pop_of(clusters[1]), "merged pop is 3+2 with no multiplier applied")
+
+  horde.set_size_multiplier_override(nil)
+end)
+
+-- Trigger-created entities that aren't OUR reanimated zombies are left untouched:
+-- no tracking, no fold, entity not destroyed.
+T.test("non-zombie trigger-created entities are ignored", function(t)
+  horde.reset_state()
+  horde.set_cap_override(0)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+
+  -- A neutral-force tree: wrong type and wrong force, so the handler must skip it.
+  local tree = t.surface.create_entity { name = "tree-01", position = o }
+  if tree then
+    horde.on_trigger_created_entity { entity = tree }
+    t.assert.is_true(tree.valid, "an unrelated trigger-created entity is untouched")
+  end
+
+  -- A player-force biter is the right type but the wrong force: also skipped.
+  local friendly = t.world.place(t.surface, "small-biter",
+    { x = o.x + 3, y = o.y }, { force = "player" })
+  horde.on_trigger_created_entity { entity = friendly }
+  t.assert.is_true(friendly.valid, "a non-enemy unit is not folded")
+  t.assert.is_false(horde.is_tracked(friendly.unit_number), "and not tracked")
+
+  local clusters = t.surface.find_entities_filtered {
+    name = tiers.HORDE.small, position = o, radius = 16,
+  }
+  t.assert.equal(0, #clusters, "no cluster created from ignored entities")
+end)
+
+-- ============================================================================
+-- Feature B: bot collection marks dropped corpses for deconstruction.
+-- ============================================================================
+T.test("bot collection marks dropped corpses for deconstruction", function(t)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+
+  corpses.set_bot_collect_override(true)
+  corpses.drop(t.surface, o, 3, "physical")
+
+  local items = t.surface.find_entities_filtered {
+    name = "item-on-ground", position = o, radius = 16,
+  }
+  t.assert.at_least(1, #items, "corpses were dropped")
+  for _, e in ipairs(items) do
+    t.assert.is_true(e.to_be_deconstructed(), "each dropped corpse is marked for deconstruction")
+  end
+
+  corpses.set_bot_collect_override(nil)
+end)
+
+T.test("with bot collection off corpses are not marked", function(t)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+
+  corpses.set_bot_collect_override(false)
+  corpses.drop(t.surface, o, 3, "physical")
+
+  local items = t.surface.find_entities_filtered {
+    name = "item-on-ground", position = o, radius = 16,
+  }
+  t.assert.at_least(1, #items, "corpses were dropped")
+  for _, e in ipairs(items) do
+    t.assert.is_false(e.to_be_deconstructed(), "dropped corpses are NOT marked when off")
+  end
+
+  corpses.set_bot_collect_override(nil)
+end)

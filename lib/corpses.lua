@@ -8,6 +8,7 @@
 -- drop. Kiln-dried corpses are a non-spoiling form produced by a recipe, so they
 -- need no runtime code here either.
 
+local config  = require("lib.config")
 local planets = require("lib.planets")
 local tiers   = require("lib.tiers")
 local melee   = require("lib.melee")
@@ -20,6 +21,18 @@ local CORPSE_ITEM = "zomtorio-corpse"
 -- Damage types that destroy a zombie utterly: no corpse, so it can never
 -- reanimate (R-CORPSE-4). Flame is "fire" in vanilla.
 local NO_CORPSE_DAMAGE = { fire = true, explosion = true }
+
+-- Test-only override of the bot-collection setting. Runtime-global settings can
+-- only be written by their owning mod, so the test harness (a separate mod) can't
+-- set the setting; this hook lets a test pin it. nil -> the live setting is used.
+-- Mirrors horde.lua's cap_override pattern.
+local bot_collect_override
+
+--- Whether dropped corpses are marked for bot collection (R bot-collect setting).
+local function bot_collect()
+  if bot_collect_override ~= nil then return bot_collect_override end
+  return config.bot_collect_corpses()
+end
 
 -- Reanimation is data-driven (spoilage); no per-tick or persistent state needed.
 function corpses.on_init() end
@@ -38,12 +51,28 @@ function corpses.drop(surface, position, count, damage_type_name, no_corpse)
   if no_corpse then return end
   if damage_type_name and NO_CORPSE_DAMAGE[damage_type_name] then return end
 
-  surface.spill_item_stack {
+  -- 2.1: spill_item_stack returns the item-on-ground entities it created.
+  local dropped = surface.spill_item_stack {
     position = position,
     stack = { name = CORPSE_ITEM, count = count },
     enable_looted = false,
     allow_belts = true,
   }
+
+  -- Bot collection (Feature B): mark each dropped corpse for deconstruction by the
+  -- player force so construction/logistic bots haul them in. The corpses then sit
+  -- in storage where they STILL reanimate on the spoil timer unless burned or
+  -- kiln-dried first — the intended tension, not a free cleanup.
+  if bot_collect() and dropped then
+    local player_force = game.forces["player"]
+    if player_force then
+      for _, item_entity in ipairs(dropped) do
+        if item_entity and item_entity.valid then
+          item_entity.order_deconstruction(player_force)
+        end
+      end
+    end
+  end
 end
 
 --- An individual zombie died: drop one corpse for it. We deliberately EXCLUDE
@@ -63,6 +92,18 @@ function corpses.on_entity_died(event)
   local no_corpse = melee.is_dead_dead(event)
   local dtype = event.damage_type and event.damage_type.name
   corpses.drop(e.surface, e.position, 1, dtype, no_corpse)
+end
+
+-- NOTE: the corpse-reanimation interception (on_trigger_created_entity) lives in
+-- lib/horde.lua, NOT here. Factorio forbids require() at runtime, so this handler
+-- can't lazily reach horde; and a top-level corpses->horde require would cycle
+-- (horde already requires corpses for corpse drops). horde already owns the cap
+-- (cap_room/track/fold), so the handler is cleanest there. See horde.on_trigger_created_entity.
+
+--- Test-only: pin (or, with nil, release) the bot-collection setting. See
+--- `bot_collect_override` above; mirrors horde.set_cap_override.
+function corpses.set_bot_collect_override(b)
+  bot_collect_override = b
 end
 
 return corpses

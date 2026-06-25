@@ -38,6 +38,10 @@ end
 --- live. config.lua and prototypes/night.lua MUST agree on this conversion.
 function config.night_speedup() return startup_value("zomtorio-night-speedup") or 1.0 end
 
+------------------------------------------------------------------- corpses
+--- Whether dropped corpses are marked for construction/logistic-bot collection.
+function config.bot_collect_corpses() return global_value("zomtorio-bot-collect-corpses") end
+
 ------------------------------------------------------------------- generation
 function config.expansion_rate()           return global_value("zomtorio-expansion-rate") end
 function config.night_assault_multiplier() return global_value("zomtorio-night-assault-multiplier") end

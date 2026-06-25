@@ -16,6 +16,7 @@
 -- any overflow into higher-population horde units rather than discarding it.
 
 local config  = require("lib.config")
+local planets = require("lib.planets")
 local tiers   = require("lib.tiers")
 local corpses = require("lib.corpses")
 local melee   = require("lib.melee")
@@ -38,6 +39,13 @@ local BURST_RADIUS = 32
 -- entity claiming an implausible health value. Kept simple: split into clusters
 -- of at most this each.
 local MAX_CLUSTER_POP = 1000
+
+-- Reverse of tiers.INDIVIDUAL: individual-zombie prototype name -> tier. Used by
+-- the reanimation handler to recognise OUR hatched zombies and recover their tier.
+local INDIVIDUAL_TO_TIER = {}
+for tier, name in pairs(tiers.INDIVIDUAL) do
+  INDIVIDUAL_TO_TIER[name] = tier
+end
 
 --------------------------------------------------------------------- storage
 -- storage.zomtorio.horde            : unit_number -> { pop, tier }
@@ -191,6 +199,89 @@ function horde.spawn(surface, pos, count, tier, force)
   -- (a building destroyed by zombies always yields at least one zombie).
   count = math.max(1, math.floor(count * size_multiplier()))
   do_spawn(surface, pos, count, tier, force)
+end
+
+--- Spare individual-zombie capacity before the cap (R-HORDE-6). Exposed so other
+--- modules (e.g. corpse reanimation) can decide whether a new zombie stays a real
+--- individual or must be folded into a cluster.
+function horde.cap_room()
+  return cap_room()
+end
+
+--- Fold `count` ALREADY-DECIDED-OVERFLOW zombies into cluster(s) near `pos`
+--- (R-HORDE-6). Unlike horde.spawn this applies NO cap check and NO horde-size
+--- multiplier: the caller has already decided these zombies are overflow that
+--- cannot be individuals, so they're not a fresh generation source.
+---
+--- To realise "fold overflow into HIGHER-POPULATION horde units", we first try to
+--- merge into an existing tracked cluster of the same `tier` within a small radius
+--- of `pos` (growing it) rather than littering the area with tiny clusters; only
+--- if none exists do we create new cluster(s), split by MAX_CLUSTER_POP.
+function horde.fold(surface, pos, count, tier, force)
+  count = math.floor(count or 0)
+  if count <= 0 then return end
+  if not (surface and surface.valid) then return end
+  if not tiers.is_valid(tier) then tier = "small" end
+  force = force or util.ENEMY_FORCE
+
+  local z = state()
+
+  -- Merge into a nearby existing cluster of the same tier if one is tracked.
+  local nearby = surface.find_entities_filtered {
+    name = tiers.HORDE[tier], position = pos, radius = 8,
+  }
+  for _, unit in ipairs(nearby) do
+    if unit.valid then
+      local rec = z.horde[unit.unit_number]
+      if rec then
+        rec.pop = rec.pop + count
+        unit.health = pop_health(unit, rec.pop, tier)
+        return
+      end
+    end
+  end
+
+  -- No mergeable cluster: create new one(s), split so none holds an absurd pop.
+  local remainder = count
+  while remainder > 0 do
+    local pop = math.min(remainder, MAX_CLUSTER_POP)
+    create_cluster(surface, pos, pop, tier, force)
+    remainder = remainder - pop
+  end
+end
+
+--- A corpse spoiled and the spoilage trigger hatched a zombie (R-CORPSE-5). Route
+--- that reanimation through the dynamic cap (R-HORDE-6 / R-GEN-6) so a big pile
+--- spoiling at once can't dump hundreds of individuals: under-cap zombies stay
+--- real individuals (and now count against the cap), overflow folds into a cluster
+--- (merging into a nearby one, so a spoiling pile becomes one growing cluster).
+---
+--- Lives here, not in lib/corpses, because Factorio forbids runtime require() and
+--- a top-level corpses->horde require would cycle (horde requires corpses already);
+--- horde already owns the cap (cap_room/track/fold), so this is its natural home.
+--- control.lua dispatches on_trigger_created_entity to it.
+function horde.on_trigger_created_entity(event)
+  local entity = event and event.entity
+  if not (entity and entity.valid) then return end
+  if not planets.is_active(entity.surface) then return end
+  -- Only OUR reanimated zombies: an enemy-force `unit` whose name is one of our
+  -- individual tiers. Leaves other mods' trigger-created entities (e.g. pentapods)
+  -- entirely untouched.
+  if entity.type ~= "unit" then return end
+  if not util.is_enemy_force(entity.force) then return end
+  local tier = INDIVIDUAL_TO_TIER[entity.name]
+  if tier == nil then return end
+
+  if cap_room() > 0 then
+    -- Under the cap: it stays a real individual and now counts against the cap.
+    track_individual(entity)
+  else
+    -- Cap full: remove the hatched individual and fold it into a cluster (merged
+    -- into a nearby one by horde.fold, so a spoiling pile accumulates into one).
+    local surface, pos = entity.surface, entity.position
+    entity.destroy()
+    horde.fold(surface, pos, 1, tier, util.ENEMY_FORCE)
+  end
 end
 
 --- Handle a hit on one of our horde units (R-HORDE-4/5). Dispatched for ALL

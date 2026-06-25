@@ -8,33 +8,43 @@
 -- the entity at population 0. We give it a large bounded max_health so a single
 -- big hit can't pre-empt the script's pop bookkeeping.
 --
--- v1 ships a single scaled/tinted tier per biter-tier. A richer multi-biter
--- cluster sprite (several biters animating in a tight pattern) and a second
--- visual size-tier (small vs. large cluster) are future polish (R-HORDE-3).
+-- A horde unit reads as a CLUMP of several biters (R-HORDE-3): we overlay multiple
+-- copies of the source biter's animation at small offsets so one entity looks like a
+-- packed swarm rather than a single (scaled) biter. Each copy is tinted a sickly green
+-- so a cluster is distinguishable from a lone biter.
 
 local util = require("util")
 local tiers = require("lib.tiers")
 
--- How much bigger a cluster reads than a single biter.
-local CLUSTER_SCALE = 1.7
+-- Where the overlaid biters sit relative to the entity centre (tiles). More entries
+-- = a denser-looking clump (and more sprites to draw, so keep it modest — clusters
+-- are few because overflow folds into a handful of them).
+local CLUSTER_OFFSETS = {
+  { 0, 0 }, { -0.8, -0.45 }, { 0.8, -0.4 },
+  { -0.6, 0.5 }, { 0.65, 0.55 }, { 0, 0.85 }, { 0, -0.8 },
+}
 
--- Tint the cluster a sickly green so it reads as distinct from a lone biter even
--- before the scale is obvious.
+-- Tint each biter in the clump a sickly green so it reads as distinct from a lone biter.
 local CLUSTER_TINT = { r = 0.55, g = 0.85, b = 0.45, a = 1.0 }
 
---- Recursively scale every `scale` field found under an animation node, in place.
---- Unit graphics are nested (layers, direction arrays, animation containers), so
---- we walk the whole subtree rather than assume one shape.
-local function scale_graphics(node, factor)
-  if type(node) ~= "table" then return end
-  if node.scale then node.scale = node.scale * factor end
-  if node.layers then
-    for _, layer in pairs(node.layers) do scale_graphics(layer, factor) end
+--- Turn one biter animation into a clump: replicate its layers once per offset,
+--- shifting (and green-tinting) each copy. Handles the layered or single-animation
+--- shapes a unit's run/attack animation can take.
+local function clump(anim)
+  if type(anim) ~= "table" then return anim end
+  local src = anim.layers or { anim }
+  local layers = {}
+  for _, off in ipairs(CLUSTER_OFFSETS) do
+    for _, layer in ipairs(src) do
+      local c = util.table.deepcopy(layer)
+      local sx = (c.shift and (c.shift[1] or c.shift.x)) or 0
+      local sy = (c.shift and (c.shift[2] or c.shift.y)) or 0
+      c.shift = { sx + off[1], sy + off[2] }
+      if not c.draw_as_shadow then c.tint = CLUSTER_TINT end
+      layers[#layers + 1] = c
+    end
   end
-  for _, v in ipairs(node) do scale_graphics(v, factor) end
-  for _, key in ipairs({ "animation", "animations" }) do
-    if node[key] then scale_graphics(node[key], factor) end
-  end
+  return { layers = layers }
 end
 
 local new_protos = {}
@@ -47,12 +57,11 @@ for _, tier in ipairs(tiers.ORDER) do
     -- keep it discoverable in the same family but ordered after the biters
     horde.order = (horde.order or "b") .. "-zomtorio-horde"
 
-    -- Make it visually read as a larger, tinted cluster (R-HORDE-3).
-    if horde.run_animation then scale_graphics(horde.run_animation, CLUSTER_SCALE) end
+    -- Make it read as a clump of several biters (R-HORDE-3).
+    if horde.run_animation then horde.run_animation = clump(horde.run_animation) end
     if horde.attack_parameters and horde.attack_parameters.animation then
-      scale_graphics(horde.attack_parameters.animation, CLUSTER_SCALE)
+      horde.attack_parameters.animation = clump(horde.attack_parameters.animation)
     end
-    horde.tint = CLUSTER_TINT
 
     -- Prototype health is pure headroom: the script sets `health` to track
     -- population and is the only thing that destroys the unit (at pop 0). A big

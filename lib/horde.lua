@@ -138,13 +138,39 @@ local function track_individual(entity)
   end
 end
 
+--- An alt-mode text label over a cluster showing how many zombies it stands in for.
+--- The cluster's health bar can't carry this (it's pinned to full so a single hit
+--- can't one-shot the swarm), and a `unit`'s hover tooltip can't be customised, so we
+--- draw the count and reveal it when the player holds ALT (like belt item counts). The
+--- render is bound to the entity, so it's auto-destroyed when the cluster dies/bursts.
+--- (Drop `only_in_alt_mode` to make the count always visible.)
+local function pop_label(unit, pop)
+  return rendering.draw_text {
+    text = tostring(pop),
+    surface = unit.surface,
+    target = { entity = unit, offset = { 0, -1.4 } },
+    color = { r = 1, g = 0.5, b = 0.4 },
+    scale = 1.4,
+    alignment = "center",
+    vertical_alignment = "middle",
+    only_in_alt_mode = true,
+  }
+end
+
+--- Keep a cluster's pop label in sync after its population changes.
+local function update_label(rec)
+  if rec.label and rec.label.valid then rec.label.text = tostring(rec.pop) end
+end
+
 --- Create one horde-unit entity holding `pop`, record it, size its health.
 local function create_cluster(surface, pos, pop, tier, force)
   local name = tiers.HORDE[tier]
   local place = surface.find_non_colliding_position(name, pos, 16, 0.5) or pos
   local unit = surface.create_entity { name = name, position = place, force = force }
   if not (unit and unit.valid) then return nil end
-  state().horde[unit.unit_number] = { pop = pop, tier = tier }
+  local rec = { pop = pop, tier = tier }
+  rec.label = pop_label(unit, pop)
+  state().horde[unit.unit_number] = rec
   unit.health = pop_health(unit, pop, tier)
   return unit
 end
@@ -238,6 +264,7 @@ function horde.fold(surface, pos, count, tier, force)
       if rec then
         rec.pop = rec.pop + count
         unit.health = pop_health(unit, rec.pop, tier)
+        update_label(rec)
         return
       end
     end
@@ -343,6 +370,7 @@ function horde.on_entity_damaged(event)
     entity.destroy()
   else
     entity.health = pop_health(entity, rec.pop, tier)
+    update_label(rec)
   end
   corpses.drop(surface, pos, removed, dtype, no_corpse)
 end
@@ -401,6 +429,16 @@ function horde.pop_of(entity)
   if not (entity and entity.valid and entity.unit_number) then return nil end
   local rec = state().horde[entity.unit_number]
   return rec and rec.pop or nil
+end
+
+--- Test/debug: the current text of a cluster's pop label (the count shown in
+--- alt-mode), or nil if it has none. Lets a headless test verify the count display
+--- tracks population.
+function horde.pop_label_text(entity)
+  if not (entity and entity.valid and entity.unit_number) then return nil end
+  local rec = state().horde[entity.unit_number]
+  if rec and rec.label and rec.label.valid then return rec.label.text end
+  return nil
 end
 
 --- Exposed for tests/other stages that need the live single-zombie health.

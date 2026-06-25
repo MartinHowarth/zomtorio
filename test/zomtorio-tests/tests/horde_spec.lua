@@ -89,9 +89,27 @@ T.test("a normal hit removes one population", function(t)
   local cluster = find_cluster(t.surface, o, "small")
   t.assert.not_nil(cluster, "cluster should exist")
   t.assert.equal(10, horde.pop_of(cluster), "starts at pop 10")
+  t.assert.equal("10", horde.pop_label_text(cluster), "pop label shows the count")
 
   hit(cluster, 5, "physical")
   t.assert.equal(9, horde.pop_of(cluster), "physical hit kills exactly 1")
+  t.assert.equal("9", horde.pop_label_text(cluster), "pop label tracks the count")
+end)
+
+-- A single huge non-explosive/fire hit must still remove only ONE — the cluster's
+-- full (huge) health makes it immune to a one-shot wipe (the bug where a strong shot
+-- killed a whole small cluster). Only the script removes population.
+T.test("a massive single physical hit removes only one (no one-shot wipe)", function(t)
+  reset(0)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  horde.spawn(t.surface, o, 8, "small", "enemy")
+  local cluster = find_cluster(t.surface, o, "small")
+  t.assert.not_nil(cluster, "cluster should exist")
+
+  hit(cluster, 100000, "physical")  -- far more than pop x single-health
+  t.assert.is_true(cluster.valid, "cluster survives a massive single physical hit")
+  t.assert.equal(7, horde.pop_of(cluster), "still only one removed")
 end)
 
 -- ----------------------------------------------------------- explosion kills

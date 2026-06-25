@@ -37,14 +37,42 @@ kiln.placeable_by = { item = "zomtorio-corpse-kiln", count = 1 }
 kiln.fluid_boxes = nil
 kiln.fluid_boxes_off_when_no_fluid_recipe = nil
 
+-- Make it LOOK like a stone furnace (a "corpse kiln") with a small biter lurking in
+-- the bottom-right corner, while remaining an assembling-machine mechanically. Use
+-- the base stone-furnace sprites (scaled up to fill the 3x3 footprint) plus a small
+-- biter-icon overlay. Replaces the inherited assembler graphics/working-arms.
+kiln.graphics_set = {
+  animation = {
+    layers = {
+      {
+        filename = "__base__/graphics/entity/stone-furnace/stone-furnace.png",
+        width = 151, height = 146, scale = 0.6, shift = { 0, -0.05 },
+      },
+      {
+        filename = "__base__/graphics/entity/stone-furnace/stone-furnace-shadow.png",
+        width = 164, height = 74, scale = 0.6, shift = { 0.25, 0.05 },
+        draw_as_shadow = true,
+      },
+      {
+        -- small biter in the bottom-right (positive shift = right/down)
+        filename = "__base__/graphics/icons/small-biter.png",
+        width = 64, height = 64, scale = 0.42, shift = { 0.7, 0.7 },
+      },
+    },
+  },
+}
+
 data:extend({
   kiln,
-  -- The kiln's item (modest steel-tier cost; reuse the assembler-2 icon).
+  -- The kiln's item: a stone-furnace icon with a small biter in the bottom-right,
+  -- matching the entity (shift is in pixels: positive = right/down).
   {
     type = "item",
     name = "zomtorio-corpse-kiln",
-    icon = "__base__/graphics/icons/assembling-machine-2.png",
-    icon_size = 64,
+    icons = {
+      { icon = "__base__/graphics/icons/stone-furnace.png", icon_size = 64 },
+      { icon = "__base__/graphics/icons/small-biter.png", icon_size = 64, scale = 0.32, shift = { 10, 10 } },
+    },
     subgroup = "production-machine",
     order = "z-zomtorio-corpse-kiln",
     place_result = "zomtorio-corpse-kiln",

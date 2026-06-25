@@ -17,10 +17,12 @@
 local CORPSE_FUEL_MJ      = 2
 local KILN_DRIED_FUEL_MJ  = 4
 
--- Reuse Space Age's spoilage icon: a decayed organic look that reads as a corpse
--- without shipping new art (a valid icon is required for the mod to load).
-local CORPSE_ICON       = "__space-age__/graphics/icons/spoilage.png"
-local KILN_DRIED_ICON   = "__space-age__/graphics/icons/bioflux.png"
+-- A zombie corpse reads as a (dead) biter: use the base small-biter icon. The
+-- kiln-dried corpse is the same biter desaturated to greyscale — a "dried out" look —
+-- generated from the base icon by graphics/biter-grey.gen.py (preserves the icon's
+-- mipmap strip + alpha), shipped as graphics/biter-grey.png.
+local CORPSE_ICON       = "__base__/graphics/icons/small-biter.png"
+local KILN_DRIED_ICON   = "__zomtorio__/graphics/biter-grey.png"
 
 data:extend({
   {

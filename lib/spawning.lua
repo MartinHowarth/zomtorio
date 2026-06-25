@@ -14,7 +14,6 @@
 local raw_cost = require("lib.raw_cost")
 local horde    = require("lib.horde")
 local planets  = require("lib.planets")
-local config   = require("lib.config")
 local util     = require("lib.util")
 
 local spawning = {}
@@ -61,12 +60,12 @@ function spawning.on_entity_died(event)
   -- (R-DEATH-2 / R-HORDE-7). Fluids don't add to the count (only the tier).
   local solid, oil = raw_cost.for_entity(entity.name)
   if solid <= 0 then return end  -- non-buildings (trees/rocks) decompose to 0
-  -- A qualifying building always yields at least one zombie, even at a low
-  -- horde-size multiplier that would otherwise round its small cost to zero.
-  local count = math.max(1, math.floor(solid * (config.horde_size_multiplier() or 1) + 0.5))
 
+  -- Count = total-raw solid cost (R-DEATH-2). The overall horde-size multiplier
+  -- (R-HORDE-7) is applied centrally in horde.spawn, which also guarantees a
+  -- qualifying building always yields at least one zombie.
   local tier = tier_for_oil(oil)
-  horde.spawn(entity.surface, entity.position, count, tier, util.ENEMY_FORCE)
+  horde.spawn(entity.surface, entity.position, solid, tier, util.ENEMY_FORCE)
 end
 
 return spawning

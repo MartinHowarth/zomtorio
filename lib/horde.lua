@@ -93,6 +93,18 @@ local function zombie_cap()
   return config.zombie_cap() or 1000
 end
 
+-- Optional overall horde-size multiplier override (test-only, same rationale as
+-- cap_override). nil -> the live setting.
+local size_mult_override
+
+--- The overall horde-size multiplier (R-HORDE-7). Applied here in the unified
+--- spawner so EVERY source (death cascade, swarm events, night escalation)
+--- scales by it. Defensive default of 1.
+local function size_multiplier()
+  if size_mult_override ~= nil then return size_mult_override end
+  return config.horde_size_multiplier() or 1
+end
+
 --- Spare capacity for individual zombies before the cap.
 local function cap_room()
   return math.max(0, zombie_cap() - state().individual_count)
@@ -138,6 +150,12 @@ function horde.spawn(surface, pos, count, tier, force)
   if not (surface and surface.valid) then return end
   if not tiers.is_valid(tier) then tier = "small" end
   force = force or util.ENEMY_FORCE
+
+  -- R-HORDE-7: scale by the overall horde-size multiplier here, so every
+  -- generation source that routes through the unified spawner scales uniformly.
+  -- max(1,...) so a positive request never rounds away at a low multiplier
+  -- (a building destroyed by zombies always yields at least one zombie).
+  count = math.max(1, math.floor(count * size_multiplier()))
 
   -- 1/2. Real individuals up to the cap.
   local make_individuals = math.min(count, cap_room())
@@ -287,6 +305,11 @@ end
 --- Test-only: pin (or, with nil, release) the cap. See `cap_override` above.
 function horde.set_cap_override(n)
   cap_override = n
+end
+
+--- Test-only: pin (or, with nil, release) the overall horde-size multiplier.
+function horde.set_size_multiplier_override(n)
+  size_mult_override = n
 end
 
 --- Test-only: hard-reset all bookkeeping. Production on_init is intentionally

@@ -57,7 +57,9 @@ end
 
 -- ----------------------------------------------------------------- pop math
 -- Force a cluster by spawning into a zero-room cap: every zombie folds into a
--- horde unit. Assert the unit exists with the expected pop and clamped health.
+-- horde unit. Assert the unit exists with the expected pop and that it sits at full
+-- (huge) health — clusters stay at max_health so no single damage instance can wipe
+-- the whole swarm; population is tracked in storage, not the health bar.
 T.test("spawn into a full cap creates a cluster with the right pop and health", function(t)
   reset(50)
   -- Fill the cap so there is no individual room: spawn exactly the cap first.
@@ -72,11 +74,8 @@ T.test("spawn into a full cap creates a cluster with the right pop and health", 
   local cluster = find_cluster(t.surface, o, "small")
   t.assert.not_nil(cluster, "a horde-unit cluster should exist")
   t.assert.equal(30, horde.pop_of(cluster), "cluster pop should be the overflow")
-
-  local single = horde.single_health("small")
-  local expected = math.min(30 * single, cluster.max_health)
-  if expected < 1 then expected = 1 end
-  t.assert.equal(expected, cluster.health, "cluster health should track pop x single")
+  t.assert.equal(cluster.max_health, cluster.health,
+    "cluster stays at full (huge) health — immune to a one-shot; pop lives in storage")
 end)
 
 -- ------------------------------------------------------------ normal-hit kill

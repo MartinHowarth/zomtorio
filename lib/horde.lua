@@ -24,11 +24,12 @@ local util    = require("lib.util")
 
 local horde = {}
 
--- Damage types that multi-kill in a swarm (R-HORDE-5). "explosion" is the
--- explosive rule; "zomtorio-swarm-melee" is the S8 tech-gated swarm-melee AoE
--- (lib/melee). The BASE punch "zomtorio-zombie-melee" is deliberately ABSENT:
--- unupgraded melee kills exactly one (R-MELEE-1).
-local MULTI_KILL_TYPES = { explosion = true, ["zomtorio-swarm-melee"] = true }
+-- Damage types that multi-kill in a swarm (R-HORDE-5): explosive OR fire kill
+-- floor(damage / single-zombie-health); everything else kills exactly one per hit.
+-- "explosion"/"fire" are the area rules; "zomtorio-swarm-melee" is the S8 tech-gated
+-- swarm-melee AoE (lib/melee). The BASE punch "zomtorio-zombie-melee" is deliberately
+-- ABSENT: unupgraded melee kills exactly one (R-MELEE-1).
+local MULTI_KILL_TYPES = { explosion = true, fire = true, ["zomtorio-swarm-melee"] = true }
 
 -- A burst (R-HORDE-4) only triggers when a character is within this radius, so
 -- abstract clusters only "become real" near a player who'd actually see them.
@@ -78,15 +79,16 @@ local function single_health(tier)
   return (proto and proto.get_max_health()) or 1
 end
 
---- Health a cluster of `pop` should display: tracks population without ever
---- exceeding the entity's ceiling (so setting it never errors), and stays
---- positive so the engine doesn't kill the unit between our hits.
+--- Health to keep a cluster at: its FULL (huge) prototype max_health. Clusters do
+--- NOT reflect population in their health bar — if they did, the bar would be
+--- pop*single, and a single damage instance larger than that total (a high-tier
+--- turret/weapon vs a small cluster) would let the ENGINE kill the whole cluster in
+--- one shot, wiping the entire population instead of the one zombie our rule allows
+--- (R-HORDE-4/5). Keeping health maxed makes the cluster immune to a one-shot; the
+--- script owns every death (1 per hit, or floor(dmg/single) for explosive/fire), and
+--- population lives in storage. (pop/tier kept in the signature for call sites.)
 local function pop_health(entity, pop, tier)
-  local h = pop * single_health(tier)
-  local max = entity.max_health  -- 2.1: readable directly off the LuaEntity
-  if h < 1 then h = 1 end
-  if h > max then h = max end
-  return h
+  return entity.max_health  -- 2.1: readable directly off the LuaEntity
 end
 
 -- Optional cap override. Runtime-global settings can only be written by their

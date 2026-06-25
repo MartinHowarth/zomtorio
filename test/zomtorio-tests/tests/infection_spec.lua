@@ -109,6 +109,31 @@ T.test("the DoT kills an infected building in the configured time", {
   end },
 })
 
+-- R-INF-3 end-to-end: a building killed by the infection DoT spawns zombies. The
+-- DoT is dealt on the enemy force, so the resulting on_entity_died (handled by
+-- the MAIN mod) routes through spawning -> horde.spawn and creates zombie
+-- entities in the shared world. We assert on the WORLD (not test-mod storage),
+-- which is what makes this a genuine end-to-end check of the integration.
+T.test("an infection death spawns zombies (R-INF-3)", {
+  function(t)
+    reset()
+    infection.set_ticks_override(60)
+    local o = t.test_origin
+    t.world.clear(t.surface, o)
+    t.building = t.world.place(t.surface, "assembling-machine-1", o)
+    t.pos = t.building.position
+    enemy_hit(t.building)
+  end,
+  { after = 70, fn = function(t)
+    infection.on_tick { tick = game.tick }
+    t.assert.is_false(t.building.valid, "building killed by the DoT")
+    local zombies = t.surface.find_entities_filtered {
+      type = "unit", force = "enemy", position = t.pos, radius = 24,
+    }
+    t.assert.at_least(1, #zombies, "infection death seeds zombies in the world")
+  end },
+})
+
 -- ---------------------------------------------------------- slider honoured
 -- With a LONG time-to-death (1200 ticks), the building must still be alive well
 -- before that (at a quarter of the time) — proving the slider actually scales it.

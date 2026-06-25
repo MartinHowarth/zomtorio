@@ -10,6 +10,7 @@
 
 local planets = require("lib.planets")
 local tiers   = require("lib.tiers")
+local util    = require("lib.util")
 
 local corpses = {}
 
@@ -53,7 +54,7 @@ function corpses.on_entity_died(event)
   local e = event and event.entity
   if not (e and e.valid) then return end
   if e.type ~= "unit" then return end
-  if not (e.force and e.force.name == "enemy") then return end
+  if not util.is_enemy_force(e.force) then return end
   if tiers.HORDE_TO_TIER[e.name] ~= nil then return end  -- a cluster, not an individual
 
   local dtype = event.damage_type and event.damage_type.name

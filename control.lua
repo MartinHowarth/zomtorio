@@ -46,7 +46,10 @@ script.on_event(defines.events.on_tick, function(event)
 end)
 
 ------------------------------------------------------------------- damage
--- Filters are installed by the modules' stages (S4/S8) to keep this cheap.
+-- NOTE: currently UNFILTERED — dispatched for every hit in the game. Each module
+-- early-outs cheaply (a type/name/validity check before any work), so this is
+-- acceptable; a LuaEntityDamagedEventFilter is evaluated in S8 once melee fixes
+-- the full set of entities we actually care about.
 script.on_event(defines.events.on_entity_damaged, function(event)
   infection.on_entity_damaged(event)
   horde.on_entity_damaged(event)

@@ -45,6 +45,11 @@ local INFECTION_DAMAGE_TYPE = "zomtorio-infection"
 -- (R-CONT-7 spirit): spread the set's processing across this many ticks.
 local PROCESS_PERIOD = 30
 
+-- Hard ceiling on infected entities processed per tick, so a factory-sized
+-- infected set can never spike a single tick (R-CONT-7). Beyond ~MAX_SLICE*PERIOD
+-- infected entities, each is simply visited a little less often.
+local MAX_SLICE = 256
+
 -- A net health gain above this (HP) while infected counts as a real heal -> cure
 -- (R-PINF-5). Small enough to ignore float noise from setting absolute health.
 local HEAL_EPSILON = 0.5
@@ -313,14 +318,17 @@ function infection.on_tick(event)
   local inf = state()
   local infected = inf.infected
 
-  -- Cheap count of the set (Lua has no O(1) size for a sparse table; the set is
-  -- small in practice and this is once per tick).
-  local count = 0
-  for _ in pairs(infected) do count = count + 1 end
+  -- O(1) set size (Factorio engine-tracked) — under R-CONT-5 the infected set can
+  -- grow to the whole factory, so a per-tick pairs() scan would itself be O(n) and
+  -- defeat the throttle (R-CONT-7).
+  local count = table_size(infected)
   if count == 0 then return end
 
+  -- Visit ~1/PROCESS_PERIOD of the set per tick, but HARD-CAP the slice so per-tick
+  -- work is bounded no matter how large the set grows (R-CONT-7). The elapsed-time
+  -- DoT keeps death timing exact even when a huge set is visited less often.
   local now = (event and event.tick) or game.tick
-  local slice = math.ceil(count / PROCESS_PERIOD)
+  local slice = math.min(MAX_SLICE, math.ceil(count / PROCESS_PERIOD))
 
   local key = inf.cursor
   for _ = 1, slice do

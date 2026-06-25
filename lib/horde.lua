@@ -18,6 +18,7 @@
 local config  = require("lib.config")
 local tiers   = require("lib.tiers")
 local corpses = require("lib.corpses")
+local util    = require("lib.util")
 
 local horde = {}
 
@@ -133,7 +134,7 @@ function horde.spawn(surface, pos, count, tier, force)
   if count <= 0 then return end
   if not (surface and surface.valid) then return end
   if not tiers.is_valid(tier) then tier = "small" end
-  force = force or "enemy"
+  force = force or util.ENEMY_FORCE
 
   -- 1/2. Real individuals up to the cap.
   local make_individuals = math.min(count, cap_room())

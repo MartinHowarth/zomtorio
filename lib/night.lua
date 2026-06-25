@@ -27,6 +27,7 @@
 local planets = require("lib.planets")
 local util    = require("lib.util")
 local horde   = require("lib.horde")
+local tiers   = require("lib.tiers")
 
 local night = {}
 
@@ -127,7 +128,10 @@ function night.on_tick(event)
         position = char.position, radius = SWEEP_RADIUS,
       }
       for _, u in pairs(units) do
-        if u.valid then
+        -- Never swap a horde-unit cluster: its population lives in storage keyed
+        -- by unit_number, and a swap would orphan that record. (Clusters have no
+        -- night variant today, so this is also belt-and-braces future-proofing.)
+        if u.valid and not tiers.HORDE_TO_TIER[u.name] then
           local target = night_now and night_variant_of(u.name) or day_form_of(u.name)
           if target then
             -- Preserve horde cap accounting across the destroy+recreate swap: if

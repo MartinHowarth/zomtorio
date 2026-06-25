@@ -174,6 +174,12 @@ function melee.on_research_finished(event)
   end
 end
 
+--- Drop a removed player's toggle state so the table can't accumulate stale keys.
+function melee.on_player_removed(event)
+  if not event then return end
+  state().double_tap[event.player_index] = nil
+end
+
 --------------------------------------------------------------------- test API
 
 --- Test-only: force the double-tap answer (true/false) regardless of player, or

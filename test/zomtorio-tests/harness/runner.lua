@@ -107,6 +107,10 @@ local function start_test()
   if t == nil then finish(); return false end
   state.step = 0
   state.failed = nil
+  -- Clear leftover enemy units so stray biters/clusters from a previous test
+  -- can't wander into this test's find_entities_filtered radius. Every test
+  -- builds its own world, so nothing relies on cross-test unit persistence.
+  game.forces["enemy"].kill_all_units()
   state.ctx = {
     assert = A,
     world = world,

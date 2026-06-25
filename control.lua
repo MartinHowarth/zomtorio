@@ -107,6 +107,12 @@ script.on_event(defines.events.on_research_finished, function(event)
   melee.on_research_finished(event)
 end)
 
+------------------------------------------------------------------- players
+-- Drop per-player melee toggle state when a player is removed.
+script.on_event(defines.events.on_player_removed, function(event)
+  melee.on_player_removed(event)
+end)
+
 ------------------------------------------------------------------- settings
 script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
   swarm.on_runtime_setting_changed(event)

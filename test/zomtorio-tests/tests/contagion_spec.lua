@@ -187,3 +187,28 @@ T.test("the per-tick budget bounds how much spread happens in one tick", {
       " dests infected in one tick (got " .. infected .. ") (R-CONT-7)")
   end },
 })
+
+-- R-CONT-5: conduits (belts/pipes/inserters) are infectable like any building —
+-- they take the DoT, die, and spawn a (small) number of zombies on death. The DoT
+-- is dealt on the enemy force, so the real on_entity_died routes through the main
+-- mod's spawning; we assert zombies appear in the shared world near the dead belt.
+T.test("an infected conduit dies and spawns zombies (R-CONT-5)", {
+  function(t)
+    reset()
+    infection.set_ticks_override(60)
+    local o = t.test_origin
+    t.world.clear(t.surface, o)
+    t.belt = t.world.place(t.surface, "transport-belt", o)
+    t.pos = t.belt.position
+    infection.infect(t.belt)
+    t.assert.is_true(infection.is_infected(t.belt), "belt is infectable like any building")
+  end,
+  { after = 70, fn = function(t)
+    infection.on_tick { tick = game.tick }
+    t.assert.is_false(t.belt.valid, "the conduit died from the infection DoT")
+    local zombies = t.surface.find_entities_filtered {
+      type = "unit", force = "enemy", position = t.pos, radius = 24,
+    }
+    t.assert.at_least(1, #zombies, "a dead conduit spawns a (small) number of zombies")
+  end },
+})

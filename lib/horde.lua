@@ -139,23 +139,19 @@ local function create_cluster(surface, pos, pop, tier, force)
   return unit
 end
 
---------------------------------------------------------------------- public
+--------------------------------------------------------------------- spawning
 
---- Unified spawner (R-HORDE-6 / R-GEN-6). Create `count` zombies of `tier` for
---- `force` near `pos` on `surface`: individuals up to the dynamic cap, with all
---- overflow folded into horde unit(s). Never discards zombies.
-function horde.spawn(surface, pos, count, tier, force)
+--- Cap-aware spawn of EXACTLY `count` zombies (NO horde-size multiplier): create
+--- individuals up to the dynamic cap, fold all overflow into horde unit(s), never
+--- discard. The burst path uses this directly to re-spawn an already-existing
+--- (already-scaled) surviving population — applying the multiplier there too would
+--- scale it twice.
+local function do_spawn(surface, pos, count, tier, force)
   count = math.floor(count or 0)
   if count <= 0 then return end
   if not (surface and surface.valid) then return end
   if not tiers.is_valid(tier) then tier = "small" end
   force = force or util.ENEMY_FORCE
-
-  -- R-HORDE-7: scale by the overall horde-size multiplier here, so every
-  -- generation source that routes through the unified spawner scales uniformly.
-  -- max(1,...) so a positive request never rounds away at a low multiplier
-  -- (a building destroyed by zombies always yields at least one zombie).
-  count = math.max(1, math.floor(count * size_multiplier()))
 
   -- 1/2. Real individuals up to the cap.
   local make_individuals = math.min(count, cap_room())
@@ -180,6 +176,21 @@ function horde.spawn(surface, pos, count, tier, force)
     create_cluster(surface, pos, pop, tier, force)
     remainder = remainder - pop
   end
+end
+
+--------------------------------------------------------------------- public
+
+--- Unified spawner (R-HORDE-6 / R-GEN-6) and the single point where the overall
+--- horde-size multiplier (R-HORDE-7) is applied — so every generation SOURCE
+--- (death cascade, swarm events, night escalation) scales uniformly. Create
+--- `count` zombies of `tier` for `force` near `pos`, capped/clustered by do_spawn.
+function horde.spawn(surface, pos, count, tier, force)
+  count = math.floor(count or 0)
+  if count <= 0 then return end
+  -- max(1,...) so a positive request never rounds away at a low multiplier
+  -- (a building destroyed by zombies always yields at least one zombie).
+  count = math.max(1, math.floor(count * size_multiplier()))
+  do_spawn(surface, pos, count, tier, force)
 end
 
 --- Handle a hit on one of our horde units (R-HORDE-4/5). Dispatched for ALL
@@ -219,7 +230,9 @@ function horde.on_entity_damaged(event)
     z.horde[entity.unit_number] = nil
     entity.destroy()
     if survivors > 0 then
-      horde.spawn(surface, pos, survivors, tier, force)
+      -- Survivors are an EXISTING (already-scaled) population — re-spawn them
+      -- without re-applying the horde-size multiplier (use do_spawn, not spawn).
+      do_spawn(surface, pos, survivors, tier, force)
     end
     -- The zombies the hit killed drop corpses (skipped for flame/explosion/
     -- double-tap); a hit can't kill more than the cluster held.

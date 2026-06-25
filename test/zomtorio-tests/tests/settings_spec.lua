@@ -57,3 +57,35 @@ T.test("a low multiplier still yields at least one zombie", function(t)
   t.assert.equal(1, cluster_pop(t.surface, o), "positive request never rounds to 0")
   horde.set_size_multiplier_override(nil)
 end)
+
+-- Regression: bursting re-spawns an ALREADY-scaled surviving population, so it
+-- must NOT re-apply the multiplier (else a high multiplier multiplies twice).
+T.test("bursting does not re-apply the horde-size multiplier", function(t)
+  horde.reset_state()
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  -- Build a pop-10 cluster at multiplier 1 (cap full so it folds into a cluster).
+  horde.set_cap_override(0)
+  horde.set_size_multiplier_override(1)
+  horde.spawn(t.surface, o, 10, "small", "enemy")
+  local cluster = t.surface.find_entities_filtered {
+    name = tiers.HORDE.small, position = o, radius = 48,
+  }[1]
+  t.assert.not_nil(cluster, "cluster should exist")
+
+  -- Now open the cap and set a HIGH multiplier; a character nearby lets a hit burst.
+  horde.set_cap_override(1000)
+  horde.set_size_multiplier_override(3)
+  t.world.place(t.surface, "character", { x = o.x + 2, y = o.y }, { force = "player" })
+  local before = horde.active_count()
+
+  cluster.damage(5, "player", "physical")          -- kills 1 -> 9 survivors burst
+  horde.on_entity_damaged {
+    entity = cluster, damage_type = { name = "physical" },
+    original_damage_amount = 5, final_damage_amount = 5,
+  }
+
+  -- 9 survivors, NOT 9*3: the multiplier must not apply to an existing population.
+  t.assert.equal(9, horde.active_count() - before, "burst survivors are not re-scaled")
+  horde.set_size_multiplier_override(nil)
+end)

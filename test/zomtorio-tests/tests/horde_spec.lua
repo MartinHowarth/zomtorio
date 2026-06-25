@@ -137,11 +137,17 @@ T.test("an individual zombie death frees its cap slot", function(t)
   horde.spawn(t.surface, o, 3, "small", "enemy")  -- cap has room -> 3 real biters
   t.assert.equal(3, horde.active_count(), "3 tracked individuals")
 
+  -- Pick a biter WE tracked: stray biters from other tests can wander into this
+  -- radius, and killing an untracked one wouldn't (correctly) change the count.
   local biters = t.surface.find_entities_filtered {
     name = tiers.INDIVIDUAL.small, position = o, radius = 32,
   }
-  t.assert.at_least(1, #biters, "individuals exist in the world")
-  horde.on_entity_died { entity = biters[1] }
+  local victim
+  for _, b in ipairs(biters) do
+    if horde.is_tracked(b.unit_number) then victim = b; break end
+  end
+  t.assert.not_nil(victim, "a tracked individual exists in the world")
+  horde.on_entity_died { entity = victim }
   t.assert.equal(2, horde.active_count(), "death frees a cap slot")
 end)
 

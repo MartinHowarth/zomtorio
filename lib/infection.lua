@@ -299,8 +299,7 @@ local function process_players(now)
         local dot = c.max_health / ticks
         local new = base - dot
         if new <= 0 then
-          local ok = pcall(function() c.die(enemy_force()) end)
-          if not ok and c.valid then c.die() end
+          c.die(enemy_force())  -- killed by the infection (attributed to the enemy)
           ps[un] = nil
         else
           c.health = new

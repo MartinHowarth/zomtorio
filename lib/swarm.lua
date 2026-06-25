@@ -330,9 +330,7 @@ function swarm.on_tick(event)
       if not s.warned and s.next_event_tick - tick <= TELEGRAPH_LEAD_TICKS then
         local remaining = math.max(0, s.next_event_tick - tick)
         local days = math.max(1, math.ceil(remaining / DAY_TICKS))
-        if game.print then
-          game.print("A swarm approaches in " .. days .. (days == 1 and " day" or " days"))
-        end
+        game.print("A swarm approaches in " .. days .. (days == 1 and " day" or " days"))
         s.warned = true
       end
       -- Begin only once due AND it is night (R-GEN-5 night-bound start).

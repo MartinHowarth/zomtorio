@@ -18,21 +18,28 @@ local function reset()
   infection.set_ticks_override(nil)
 end
 
--- Make a bare character at the test origin on a cleared tile.
+-- Make a bare character at the test origin on a cleared tile, then establish its
+-- health-snapshot baseline (an on_tick scans all characters and records health).
 local function make_character(t)
   local o = t.test_origin
   t.world.clear(t.surface, o)
-  return t.surface.create_entity { name = "character", position = o, force = "player" }
+  local char = t.surface.create_entity { name = "character", position = o, force = "player" }
+  -- Seed the per-character health snapshot so bite detection has a baseline.
+  infection.on_tick { tick = game.tick }
+  return char
 end
 
--- Synthesize a hit on `char` and dispatch it to the handler.
+-- Synthesize a hit on `char` and dispatch it to the handler. `opts.final_health`
+-- is the character's health AFTER the hit (event.final_health) — the signal the
+-- handler now uses. A fully shield-absorbed bite leaves it == the prior health.
 local function hit(char, opts)
   opts = opts or {}
   infection.on_entity_damaged {
     entity = char,
     force = opts.force or game.forces.enemy,
     original_damage_amount = opts.amount or 5,
-    final_damage_amount = opts.final ~= nil and opts.final or 5,
+    final_damage_amount = opts.final_damage ~= nil and opts.final_damage or 5,
+    final_health = opts.final_health,
     damage_type = { name = "physical" },
   }
 end
@@ -43,32 +50,43 @@ local function tick_n(n)
 end
 
 -- ---------------------------------------------------------- bite infects
-T.test("a bite that deals health damage infects the player (R-PINF-2/3)", function(t)
+-- Baseline 100, bite leaves the character at 90 -> real health drop -> infected.
+T.test("a bite that drops health infects the player (R-PINF-2/3)", function(t)
   reset()
   local char = make_character(t)
   t.assert.not_nil(char, "character should be created")
+  char.health = 100
+  infection.on_tick { tick = game.tick }  -- snapshot baseline = 100
 
-  hit(char, { final = 5 })
+  hit(char, { final_health = 90 })  -- lost 10 HP
 
-  t.assert.is_true(infection.is_player_infected(char), "health-damage bite => infected")
+  t.assert.is_true(infection.is_player_infected(char), "health-drop bite => infected")
 end)
 
 -- ---------------------------------------------------------- shield-absorbed
+-- Baseline 100, bite leaves the character STILL at 100 (a shield ate it all):
+-- no health was lost, so no infection — this is the case final_damage_amount
+-- could not prove, since it reports > 0 even behind a full shield (R-PINF-3).
 T.test("a shield-absorbed bite does NOT infect (R-PINF-3)", function(t)
   reset()
   local char = make_character(t)
+  char.health = 100
+  infection.on_tick { tick = game.tick }  -- snapshot baseline = 100
 
-  hit(char, { final = 0 })  -- fully absorbed: no health damage
+  hit(char, { final_health = 100, final_damage = 5 })  -- damage > 0 but no health lost
 
   t.assert.is_false(infection.is_player_infected(char), "shield-absorbed => not infected")
 end)
 
 -- ---------------------------------------------------------- non-enemy damage
-T.test("non-enemy damage does not infect the player", function(t)
+-- Health really dropped, but the damage wasn't enemy-caused -> not infected.
+T.test("non-enemy health drop does not infect the player", function(t)
   reset()
   local char = make_character(t)
+  char.health = 100
+  infection.on_tick { tick = game.tick }  -- snapshot baseline = 100
 
-  hit(char, { force = game.forces.player, final = 5 })
+  hit(char, { force = game.forces.player, final_health = 90 })
 
   t.assert.is_false(infection.is_player_infected(char), "friendly damage => not infected")
 end)
@@ -78,8 +96,10 @@ T.test("player infection does nothing when the setting is off (R-PINF-1)", funct
   reset()
   infection.set_player_enabled_override(false)
   local char = make_character(t)
+  char.health = 100
+  infection.on_tick { tick = game.tick }  -- snapshot baseline = 100
 
-  hit(char, { final = 5 })
+  hit(char, { final_health = 90 })
 
   t.assert.is_false(infection.is_player_infected(char), "setting off => not infected")
 end)
@@ -91,7 +111,7 @@ T.test("the DoT lowers health and kills in the configured time (R-PINF-2)", func
   infection.set_ticks_override(120)
   local char = make_character(t)
   local maxhp = char.max_health
-  hit(char, { final = 5 })
+  hit(char, { final_health = maxhp - 5 })  -- lost 5 HP off full
   t.assert.is_true(infection.is_player_infected(char), "infected at t0")
 
   -- Half the time-to-death: alive, health roughly dropped.
@@ -113,7 +133,7 @@ T.test("passive regen is suppressed while infected (R-PINF-4)", function(t)
   reset()
   infection.set_ticks_override(600)
   local char = make_character(t)
-  hit(char, { final = 5 })
+  hit(char, { final_health = char.max_health - 5 })
 
   tick_n(30)
   local before = char.health
@@ -134,7 +154,7 @@ T.test("a net health gain cures the player (R-PINF-5)", function(t)
   reset()
   infection.set_ticks_override(600)
   local char = make_character(t)
-  hit(char, { final = 5 })
+  hit(char, { final_health = char.max_health - 5 })
 
   tick_n(30)
   t.assert.is_true(char.health < char.max_health, "DoT dropped health")

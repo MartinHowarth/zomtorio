@@ -11,6 +11,19 @@ always stay dead.
 > on **Nauvis only**; other planets are untouched (the mod is structured so
 > per-planet mechanics can be added later).
 
+## Features at a glance
+
+- **Swarm hordes** — enemies are weak, slow, and tightly packed, but vastly more numerous; huge numbers are represented cheaply by "horde unit" clusters under a configurable active-zombie cap.
+- **Buildings become zombie sources** — a building the horde destroys spawns zombies equal to its total raw resource cost (oil in the recipe → tougher zombies); walls/gates exempt; your own demolition never spawns anything.
+- **Infection + contagion** — a horde hit infects a building/robot (damage-over-time, cured by full repair) and spreads downstream through the factory along the flow of goods (inserters, loaders, drills, belts), bounded so it never costs UPS.
+- **Player infection** — bites that get through your shields infect you; regen is suppressed until any heal cures it.
+- **Biohazard alt-mode marker** — infected buildings show a red biohazard warning triangle in alt-mode (like the frozen/no-power icons), with no effect on operation.
+- **Corpses & reanimation** — kills drop burnable corpses that reanimate into zombies (spoilage) wherever they sit; kiln-dry them to store safely, at a fuel loss. Fire/explosions leave no corpse.
+- **Melee tech + Double Tap** — researchable swarm multi-kill (two tiers) and a toggle for clean, corpse-free melee kills.
+- **Night & swarm events** — zombies move faster at night; telegraphed, evolution-scaling swarm events strike at night on top of pollution-driven attacks.
+- **Denser, cheaper enemies** — pollution recruits far more attackers, nests and expansion are cranked up, all tunable.
+- **Fully configurable** — see the settings table below.
+
 ## What changes
 
 ### The horde

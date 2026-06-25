@@ -198,3 +198,25 @@ T.test("a construction robot is infectable", function(t)
 
   t.assert.is_true(infection.is_infected(robot), "robots are infectable (R-INF-6)")
 end)
+
+-- Alt-mode biohazard marker: shown over an infected building, cleared on cure.
+-- (Rendering works headless — render objects are created even with no client;
+-- only_in_alt_mode just governs client display.)
+T.test("an infected building shows a biohazard marker, cleared on cure", {
+  function(t)
+    reset()
+    infection.set_ticks_override(600)
+    local o = t.test_origin
+    t.world.clear(t.surface, o)
+    t.b = t.world.place(t.surface, "assembling-machine-1", o)
+    enemy_hit(t.b)
+    t.assert.is_true(infection.has_marker(t.b), "marker shown while infected")
+  end,
+  { after = 30, fn = function(t)
+    infection.on_tick { tick = game.tick }
+    t.b.health = t.b.max_health        -- full repair -> cured on next process
+    infection.on_tick { tick = game.tick }
+    t.assert.is_false(infection.is_infected(t.b), "cured by repair")
+    t.assert.is_false(infection.has_marker(t.b), "marker cleared on cure")
+  end },
+})

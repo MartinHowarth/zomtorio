@@ -22,6 +22,13 @@ end
 function config.horde_size_multiplier() return global_value("zomtorio-horde-size-multiplier") end
 function config.zombie_cap()            return global_value("zomtorio-zombie-cap") end
 
+--- Per-nest swarm budget endpoints (lib/nest.lua): the cluster population a single
+--- nest can sustain locally, interpolated on chunk pollution from base (no
+--- pollution) up to max (heavy pollution). Caps how big a nest's local swarm grows
+--- when the global cap is full, so an un-triggered nest can't grow it forever.
+function config.nest_swarm_base() return global_value("zomtorio-nest-swarm-base") end
+function config.nest_swarm_max()  return global_value("zomtorio-nest-swarm-max") end
+
 ------------------------------------------------------------------- infection
 function config.building_infection_enabled() return global_value("zomtorio-building-infection") end
 function config.player_infection_enabled()   return global_value("zomtorio-player-infection") end

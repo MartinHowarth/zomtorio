@@ -88,6 +88,29 @@ data:extend({
     maximum_value = 100000,
     order = "a-b",
   },
+  -- Per-nest swarm budget (lib/nest.lua): once the global cap is full, engine nest
+  -- output folds into a LOCAL cluster at the nest. These bound how big that local
+  -- swarm grows, interpolated on local chunk pollution from base (pristine nest) up
+  -- to max (heavily polluted nest), so an un-triggered nest can't grow an infinite
+  -- swarm while busy nests still field large ones.
+  {
+    type = "int-setting",
+    name = "zomtorio-nest-swarm-base",
+    setting_type = "runtime-global",
+    default_value = 50,
+    minimum_value = 1,
+    maximum_value = 10000,
+    order = "a-c",
+  },
+  {
+    type = "int-setting",
+    name = "zomtorio-nest-swarm-max",
+    setting_type = "runtime-global",
+    default_value = 1000,
+    minimum_value = 1,
+    maximum_value = 100000,
+    order = "a-d",
+  },
   -- Bot collection of dropped corpses (Feature B): when on, dropped corpses are
   -- marked for deconstruction so construction/logistic bots haul them to storage
   -- (where they still reanimate unless burned/kiln-dried — the intended tension).

@@ -3,6 +3,7 @@
 require("tests.smoke_spec")
 require("tests.raw_cost_spec")
 require("tests.horde_spec")
+require("tests.nest_spec")
 require("tests.spawning_spec")
 require("tests.infection_spec")
 require("tests.player_infection_spec")

@@ -11,6 +11,7 @@ local corpses   = require("lib.corpses")
 local melee     = require("lib.melee")
 local night     = require("lib.night")
 local swarm     = require("lib.swarm")
+local nest      = require("lib.nest")
 
 -- Modules with first-time setup. raw_cost runs first: others depend on its cache.
 local INIT_ORDER = { raw_cost, horde, infection, contagion, corpses, melee, night, swarm }
@@ -73,6 +74,16 @@ end)
 script.on_event(defines.events.on_trigger_created_entity, function(event)
   horde.on_trigger_created_entity(event)
 end)
+
+------------------------------------------------------------------- nest output
+-- An engine spawner emitted a unit; route it through the same cap so saturated
+-- nests form local swarm clusters instead of unlimited loose individuals. Guarded
+-- in case the event id is absent on an older engine build.
+if defines.events.on_entity_spawned then
+  script.on_event(defines.events.on_entity_spawned, function(event)
+    nest.on_entity_spawned(event)
+  end)
+end
 
 ------------------------------------------------------------------- build/remove
 -- Maintains the contagion mover registry.

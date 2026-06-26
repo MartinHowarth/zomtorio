@@ -132,4 +132,8 @@ for their meaning too (melee that cuts a *swarm*; the command that triggers a *h
   dir). Authoritative results: `test/.factorio-data/factorio-current.log`.
 - **Integration tests must drive the live mod via real events + the `zomtorio-debug` remote**,
   never `require` the lib modules into the test mod (each mod gets its own module copy + storage).
+- **Every test must state its PURPOSE — the behaviour it defends, not just what it asserts.**
+  Put a short comment above each test (or test group) explaining *why it exists / what regression
+  or requirement it guards*, so a future reader knows what breaks if it fails. Many bug-fix tests
+  exist specifically to stop a flagged bug from regressing — name the bug.
 - `./play.sh` — launch the GUI with only Zomtorio (no test harness); never touches saves.

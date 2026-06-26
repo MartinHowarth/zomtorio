@@ -465,7 +465,9 @@ T.test("REAL: an infected pump infects the fluid wagon on its serviced rail", {
     t.wagon = t.surface.create_entity { name = "fluid-wagon", position = { x = o.x, y = o.y },
       direction = defines.direction.east, force = "player" }
     -- A pump beside the rail line (so it has a rail target onto the wagon's rail),
-    -- holding fluid so it spreads.
+    -- holding fluid so it spreads. POWERED (a pump only moves fluid — and so only
+    -- participates in the wagon link — while powered).
+    t.world.power_region(t.surface, o)
     t.pump = t.world.place(t.surface, "pump", { x = o.x, y = o.y + 2 },
                            { direction = defines.direction.north })
     if t.pump then t.pump.insert_fluid { name = "water", amount = 100 }; bite(t.pump) end
@@ -499,6 +501,9 @@ T.test("REAL: an infected fluid wagon infects the pump servicing it", {
     end
     t.wagon = t.surface.create_entity { name = "fluid-wagon", position = { x = o.x, y = o.y },
       direction = defines.direction.east, force = "player" }
+    -- POWER the pump: only a powered pump pumps from the wagon, so only a powered
+    -- pump should catch the wagon's infection.
+    t.world.power_region(t.surface, o)
     t.pump = t.world.place(t.surface, "pump", { x = o.x, y = o.y + 2 },
                            { direction = defines.direction.north })
     pcall(function() t.wagon.insert_fluid { name = "water", amount = 100 } end)
@@ -512,6 +517,39 @@ T.test("REAL: an infected fluid wagon infects the pump servicing it", {
   end },
   { after = 150, fn = function(t)
     t.assert.is_true(t.pump.valid and is_infected(t.pump),
-      "an infected fluid wagon infected the pump servicing its rail")
+      "an infected fluid wagon infected the (powered) pump servicing its rail")
+  end },
+})
+
+-- =====================================================================
+-- N. NEGATIVE: an UNPOWERED pump docked at an infected wagon must stay clean.
+--    PURPOSE: defends the reported bug — a pump that isn't powered isn't pumping
+--    fluid to/from the wagon, so (like an unpowered inserter) it must neither be
+--    infected by nor infect the wagon. Identical to M but with NO power.
+-- =====================================================================
+T.test("REAL: an UNPOWERED pump at an infected wagon is not infected", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 16)
+    set_ticks(36000)
+    for x = o.x - 6, o.x + 6, 2 do
+      t.surface.create_entity { name = "straight-rail", position = { x = x, y = o.y },
+        direction = defines.direction.east, force = "player" }
+    end
+    t.wagon = t.surface.create_entity { name = "fluid-wagon", position = { x = o.x, y = o.y },
+      direction = defines.direction.east, force = "player" }
+    -- NO power_region: the pump has no electricity, so it isn't transferring.
+    t.pump = t.world.place(t.surface, "pump", { x = o.x, y = o.y + 2 },
+                           { direction = defines.direction.north })
+    pcall(function() t.wagon.insert_fluid { name = "water", amount = 100 } end)
+    if t.wagon then remote.call(DEBUG, "infect", t.wagon) end
+  end,
+  { after = 3, fn = function(t)
+    t.assert.not_nil(t.pump, "pump placed beside the rail")
+    t.assert.is_true(t.wagon.valid and is_infected(t.wagon), "wagon is infected at t0")
+  end },
+  { after = 150, fn = function(t)
+    t.assert.is_false(t.pump.valid and is_infected(t.pump),
+      "an UNPOWERED pump must NOT be infected by the wagon")
   end },
 })

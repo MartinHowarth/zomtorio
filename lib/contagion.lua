@@ -406,7 +406,10 @@ local function spread_pipe_all(conduit)
   -- (a wagon loaded via the output rail or drained via the input rail both count), like
   -- an inserter infecting a cargo wagon either way. pcall-guarded so older 2.1 (without
   -- these members) degrades gracefully to no wagon spread.
-  if conduit.type == "pump" then
+  -- Only a POWERED pump actually moves fluid to/from the wagon (same rule as movers):
+  -- an unpowered pump isn't transferring, so it neither infects nor is infected by the
+  -- wagon.
+  if conduit.type == "pump" and powered(conduit) then
     for _, prop in ipairs({ "pump_input_rail_targets", "pump_output_rail_targets" }) do
       local ok, rails = pcall(function() return conduit[prop] end)
       if ok and type(rails) == "table" then
@@ -448,7 +451,9 @@ local function spread_pipe_all(conduit)
             end
           end
         end
-        if services then infection.infect(pump) end
+        -- Only infect a pump that is actually pumping (powered): an unpowered pump
+        -- docked at an infected wagon isn't transferring fluid, so it stays clean.
+        if services and powered(pump) then infection.infect(pump) end
       end
     end
   end

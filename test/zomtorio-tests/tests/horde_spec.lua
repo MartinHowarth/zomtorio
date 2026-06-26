@@ -216,36 +216,129 @@ T.test("a horde marches on the factory building nearest its spawn point", {
   end },
 })
 
------------------------------------------------------- persistent counted warning
+------------------------------------------------------ approaches as a WALL
 
--- DEFENDS the warning rework: a persistent map marker tracks the live horde count
--- and only RETIRES once the horde thins below 25 (so it sticks around for the whole
--- assault, not just the spawning window, and stragglers/ambient can't keep it up
--- forever). Driven at a controlled, generated location via start_warning_at so the
--- count/centroid/auto-clear logic is exercised independent of the far spawn origin.
-T.test("the horde warning tracks the live count and retires below 25", {
+-- DEFENDS "a wall of zombies, not single file": a horde spawns across multiple
+-- columns spread along a broad front (perpendicular to the approach), and the columns
+-- aim at DIFFERENT factory points (parallel lanes) rather than one shared target that
+-- would re-funnel them into single file. Angle + factory are pinned so the geometry
+-- is deterministic; the columns are asserted via debug_wall_columns (no spawning).
+T.test("a horde approaches as a wide WALL with spread columns and distinct targets", {
   function(t)
     reset(t)
-    t.world.clear(t.surface, t.test_origin, 80)   -- > WARNING_SCAN_RADIUS, so the scan is clean
-    horde.start_warning_at(t.test_origin, 100)
-    -- a live horde of 30 at the warning centroid
-    for i = 1, 30 do
-      t.world.place(t.surface, "small-biter",
-        { x = t.test_origin.x + (i % 6), y = t.test_origin.y + math.floor(i / 6) },
-        { force = "enemy" })
-    end
-    horde.update_warning_now()
-    local w = horde.get_state().warning
-    t.assert.not_nil(w, "warning stays up while a live horde (>=25) is present")
-    t.assert.at_least(25, w.count, "the marker count reflects the live horde")
+    -- A wide base: two buildings far apart on the x axis. Pin the approach angle to
+    -- pi/2 so the front runs along x (columns spread across the two buildings).
+    horde.set_factory_override {
+      center = { x = 0, y = 0 }, radius = 120,
+      buildings = { { x = 120, y = 0 }, { x = -120, y = 0 } },
+    }
+    horde.set_overrides { enabled = true }
+    horde.set_evolution_override(0.0)
+    horde.set_angle_override(math.pi / 2)
+    horde.force_event(1)
   end,
   { after = 1, fn = function(t)
-    t.world.clear(t.surface, t.test_origin, 80)    -- horde wiped out
-    horde.update_warning_now()
-    t.assert.equal(nil, horde.get_state().warning,
-      "the warning retires once the horde thins below 25")
+    local cols = horde.debug_wall_columns(6000)
+    t.assert.at_least(3, #cols, "the horde spreads across multiple columns (not single file)")
+    local minx, maxx, miny, maxy = math.huge, -math.huge, math.huge, -math.huge
+    for _, c in ipairs(cols) do
+      minx = math.min(minx, c.pos.x); maxx = math.max(maxx, c.pos.x)
+      miny = math.min(miny, c.pos.y); maxy = math.max(maxy, c.pos.y)
+    end
+    local span = math.sqrt((maxx - minx) ^ 2 + (maxy - miny) ^ 2)
+    t.assert.at_least(100, span, "columns span a broad front (wall width)")
+    -- columns must NOT all aim at one point (that funnels into single file)
+    local targets = {}
+    for _, c in ipairs(cols) do targets[c.target.x .. "," .. c.target.y] = true end
+    local n = 0; for _ in pairs(targets) do n = n + 1 end
+    t.assert.at_least(2, n, "columns target different factory points (parallel lanes)")
   end },
 })
+
+------------------------------------------------------ warning: live population
+
+-- DEFENDS the reported bug: the warning count must NOT drop while the horde merely
+-- MOVES/DISPERSES (the old fixed-radius position scan decayed as the marching wall
+-- spread past 64 tiles, despite nothing dying). The count now comes from the horde's
+-- flagged MEMBERS (swarm.horde_population), so it is position-independent.
+T.test("the warning count does NOT drop when the horde disperses (only deaths drop it)", function(t)
+  reset(t)
+  t.world.clear(t.surface, t.test_origin, 48)
+  swarm.set_cap_override(0)                 -- fold the spawn into one cluster
+  swarm.set_size_multiplier_override(1)
+  horde.start_warning_at(t.test_origin, 100)
+  -- 40 flagged horde members -> a pop-40 cluster
+  swarm.spawn(t.surface, t.test_origin, 40, "small", "enemy", nil, nil, true)
+  horde.update_warning_now()
+  t.assert.equal(40, horde.get_state().warning.count, "count starts at the live population (40)")
+
+  -- Move the cluster FAR (well beyond the old 64-tile scan radius). Count must hold.
+  local cluster = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("biter", "small"), position = t.test_origin, radius = 32,
+  }[1]
+  t.assert.not_nil(cluster, "the horde cluster exists")
+  cluster.teleport { x = t.test_origin.x + 96, y = t.test_origin.y + 96 }
+  horde.update_warning_now()
+  t.assert.equal(40, horde.get_state().warning.count,
+    "dispersing/moving the horde does NOT drop the count")
+  swarm.set_size_multiplier_override(nil)
+end)
+
+-- DEFENDS that the count DOES fall when the horde is actually killed, and the marker
+-- RETIRES once it thins below 25 (so it sticks around for the whole assault, then
+-- clears — stragglers can't keep it up forever).
+T.test("the warning count drops on real kills and retires below 25", {
+  function(t)
+    reset(t)
+    t.world.clear(t.surface, t.test_origin, 48)
+    swarm.set_cap_override(0)
+    swarm.set_size_multiplier_override(1)
+    horde.start_warning_at(t.test_origin, 100)
+    swarm.spawn(t.surface, t.test_origin, 40, "small", "enemy", nil, nil, true)
+    horde.update_warning_now()
+    t.assert.equal(40, horde.get_state().warning.count, "starts at 40")
+  end,
+  { after = 1, fn = function(t)
+    -- Actually KILL ~20 of the cluster (an explosion multi-kill), dropping it below 25.
+    local cluster = t.surface.find_entities_filtered {
+      name = tiers.swarm_name("biter", "small"), position = t.test_origin, radius = 32,
+    }[1]
+    t.assert.not_nil(cluster, "cluster exists")
+    local single = swarm.single_health("small")
+    swarm.on_entity_damaged {
+      entity = cluster, damage_type = { name = "explosion" },
+      original_damage_amount = single * 20, final_damage_amount = single * 20,
+    }
+    horde.update_warning_now()
+    t.assert.equal(nil, horde.get_state().warning,
+      "the warning retires once the horde is killed below 25")
+    swarm.set_size_multiplier_override(nil)
+  end },
+})
+
+-- DEFENDS the night-horde undercount: night swaps clusters near a player to their
+-- faster variant (destroy+recreate). Membership must carry across the swap, or the
+-- warning count would drop at dusk/dawn though nothing died.
+T.test("night-swapping a horde cluster preserves its warning membership", function(t)
+  reset(t)
+  t.world.clear(t.surface, t.test_origin, 48)
+  swarm.set_cap_override(0)
+  swarm.set_size_multiplier_override(1)
+  horde.start_warning_at(t.test_origin, 100)
+  swarm.spawn(t.surface, t.test_origin, 30, "small", "enemy", nil, nil, true)
+  horde.update_warning_now()
+  t.assert.equal(30, horde.get_state().warning.count, "starts at 30")
+
+  local cluster = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("biter", "small"), position = t.test_origin, radius = 32,
+  }[1]
+  t.assert.not_nil(cluster, "day cluster exists")
+  swarm.swap_cluster(cluster, tiers.swarm_both("biter", "small")[2])  -- -> night variant
+  horde.update_warning_now()
+  t.assert.equal(30, horde.get_state().warning.count,
+    "membership carries across the night swap (count unchanged)")
+  swarm.set_size_multiplier_override(nil)
+end)
 
 ------------------------------------------------------ active event spawns via horde
 

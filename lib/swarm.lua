@@ -49,9 +49,12 @@ for tier, name in pairs(tiers.INDIVIDUAL) do
 end
 
 --------------------------------------------------------------------- storage
--- storage.zomtorio.swarm            : unit_number -> { pop, tier }
+-- storage.zomtorio.swarm            : unit_number -> { pop, tier, kind, ... }
 -- storage.zomtorio.individuals      : unit_number -> true  (zombies WE spawned)
 -- storage.zomtorio.individual_count : running size of the above (cap accounting)
+-- storage.zomtorio.horde_units      : unit_number -> LuaEntity  (members of the
+--   CURRENT horde event — clusters AND individuals — so the horde warning can count
+--   the live horde by POPULATION, dispersion-proof; see swarm.horde_population)
 
 local function state()
   storage.zomtorio = storage.zomtorio or {}
@@ -59,6 +62,7 @@ local function state()
   z.swarm = z.swarm or {}
   z.individuals = z.individuals or {}
   z.individual_count = z.individual_count or 0
+  z.horde_units = z.horde_units or {}
   return z
 end
 
@@ -139,6 +143,17 @@ local function track_individual(entity)
   end
 end
 
+--- Mark an entity (cluster or individual) as a member of the CURRENT horde event,
+--- keeping its reference so horde.update_warning can count the live horde by
+--- POPULATION (Σ cluster pops + loose individuals). This is dispersion-proof: the
+--- "remaining" count only falls when zombies actually die/merge-away (pruned on
+--- read), never because the horde spread out beyond a scan radius.
+local function register_horde_unit(entity)
+  if entity and entity.valid and entity.unit_number then
+    state().horde_units[entity.unit_number] = entity
+  end
+end
+
 --- An alt-mode text label over a cluster showing how many zombies it stands in for.
 --- The cluster's health bar can't carry this (it's pinned to full so a single hit
 --- can't one-shot the swarm), and a `unit`'s hover tooltip can't be customised, so we
@@ -175,18 +190,20 @@ end
 --- no corpse on death — tracked so proportional corpse drops survive folding.
 --- `kind` ("biter" default | "spitter") picks the cluster prototype and is stored on
 --- the record so the hit handler uses the right single-zombie health and burst kind.
-local function create_cluster(surface, pos, pop, tier, force, command, shamblers, kind)
+--- `horde_member` (bool) flags it as part of the current horde event (warning count).
+local function create_cluster(surface, pos, pop, tier, force, command, shamblers, kind, horde_member)
   kind = kind or "biter"
   local name = tiers.swarm_name(kind, tier)
   local place = surface.find_non_colliding_position(name, pos, 16, 0.5) or pos
   local unit = surface.create_entity { name = name, position = place, force = force }
   if not (unit and unit.valid) then return nil end
-  local rec = { pop = pop, tier = tier, kind = kind,
+  local rec = { pop = pop, tier = tier, kind = kind, horde_member = horde_member or nil,
                 shamblers = math.min(shamblers or 0, pop), shambler_acc = 0 }
   rec.label = pop_label(unit, pop)
   state().swarm[unit.unit_number] = rec
   unit.health = pop_health(unit, pop, tier)
   apply_command(unit, command)
+  if horde_member then register_horde_unit(unit) end
   return unit
 end
 
@@ -197,7 +214,7 @@ end
 --- discard. The burst path uses this directly to re-spawn an already-existing
 --- (already-scaled) surviving population — applying the multiplier there too would
 --- scale it twice.
-local function do_spawn(surface, pos, count, tier, force, command, kind)
+local function do_spawn(surface, pos, count, tier, force, command, kind, horde_member)
   count = math.floor(count or 0)
   if count <= 0 then return end
   if not (surface and surface.valid) then return end
@@ -216,6 +233,7 @@ local function do_spawn(surface, pos, count, tier, force, command, kind)
     }
     if zombie and zombie.valid then
       track_individual(zombie)
+      if horde_member then register_horde_unit(zombie) end
       apply_command(zombie, command)
       made = made + 1
     end
@@ -226,7 +244,7 @@ local function do_spawn(surface, pos, count, tier, force, command, kind)
   local remainder = count - made
   while remainder > 0 do
     local pop = math.min(remainder, MAX_CLUSTER_POP)
-    create_cluster(surface, pos, pop, tier, force, command, nil, kind)
+    create_cluster(surface, pos, pop, tier, force, command, nil, kind, horde_member)
     remainder = remainder - pop
   end
 end
@@ -234,7 +252,7 @@ end
 --- Spawn `n` reanimated-shambler individuals near `pos`, cap-aware: real shambler
 --- entities up to the cap, folding any overflow into a swarm AS SHAMBLERS. Used by
 --- the burst path so a bursting swarm's shambler share stays shamblers (no corpse).
-local function spawn_shamblers(surface, pos, n, force)
+local function spawn_shamblers(surface, pos, n, force, horde_member)
   n = math.floor(n or 0)
   if n <= 0 then return end
   force = force or util.ENEMY_FORCE
@@ -245,12 +263,13 @@ local function spawn_shamblers(surface, pos, n, force)
     local s = surface.create_entity { name = tiers.SHAMBLER, position = place, force = force }
     if s and s.valid then
       track_individual(s)
+      if horde_member then register_horde_unit(s) end
       made = made + 1
     end
   end
   local overflow = n - made
   if overflow > 0 then
-    swarm.fold(surface, pos, overflow, "small", force, overflow)
+    swarm.fold(surface, pos, overflow, "small", force, overflow, "biter", horde_member)
   end
 end
 
@@ -264,13 +283,15 @@ end
 --- used by swarm events to march the swarm at the factory from its spawn point.
 --- `kind` ("biter" default | "spitter") — our scripted sources all pass biter; only
 --- the engine's evolution-gated spitter spawns (routed via lib/nest) use "spitter".
-function swarm.spawn(surface, pos, count, tier, force, command, kind)
+--- `horde_member` (bool) flags every unit/cluster created as part of the current
+--- horde event so the warning can track the live horde's population (lib/horde).
+function swarm.spawn(surface, pos, count, tier, force, command, kind, horde_member)
   count = math.floor(count or 0)
   if count <= 0 then return end
   -- max(1,...) so a positive request never rounds away at a low multiplier
   -- (a building destroyed by zombies always yields at least one zombie).
   count = math.max(1, math.floor(count * size_multiplier()))
-  do_spawn(surface, pos, count, tier, force, command, kind)
+  do_spawn(surface, pos, count, tier, force, command, kind, horde_member)
 end
 
 --- Spare individual-zombie capacity before the cap (R-HORDE-6). Exposed so other
@@ -295,7 +316,8 @@ end
 --- `kind` ("biter" default | "spitter"): a folded spitter forms a SPITTER swarm and
 --- only ever merges into a same-KIND cluster — so spitters don't vanish into biter
 --- swarms. (Shamblers are always biters, so shambler_count only ever rides biter folds.)
-function swarm.fold(surface, pos, count, tier, force, shambler_count, kind)
+--- `horde_member` (bool) flags the merged/created cluster as part of the horde event.
+function swarm.fold(surface, pos, count, tier, force, shambler_count, kind, horde_member)
   count = math.floor(count or 0)
   if count <= 0 then return end
   if not (surface and surface.valid) then return end
@@ -317,6 +339,7 @@ function swarm.fold(surface, pos, count, tier, force, shambler_count, kind)
       if rec then
         rec.pop = rec.pop + count
         rec.shamblers = math.min((rec.shamblers or 0) + shambler_count, rec.pop)
+        if horde_member then rec.horde_member = true; register_horde_unit(unit) end
         unit.health = pop_health(unit, rec.pop, tier)
         update_label(rec)
         return
@@ -331,7 +354,7 @@ function swarm.fold(surface, pos, count, tier, force, shambler_count, kind)
     local pop = math.min(remainder, MAX_CLUSTER_POP)
     local sh = math.min(shambler_count, pop)
     shambler_count = shambler_count - sh
-    create_cluster(surface, pos, pop, tier, force, nil, sh, kind)
+    create_cluster(surface, pos, pop, tier, force, nil, sh, kind, horde_member)
     remainder = remainder - pop
   end
 end
@@ -433,17 +456,19 @@ function swarm.on_entity_damaged(event)
   if cap_room() > 0 and character_near(surface, pos) then
     local survivors = rec.pop                    -- already decremented above
     local surviving_shamblers = rec.shamblers
+    local hm = rec.horde_member                  -- survivors stay horde members
     z.swarm[entity.unit_number] = nil
     entity.destroy()
     if survivors > 0 then
       -- Survivors are an EXISTING (already-scaled) population — re-spawn without
       -- re-applying the swarm-size multiplier (do_spawn, not spawn). Shamblers
       -- (always biters) first (cap-aware), then the normal remainder as THIS swarm's
-      -- kind (so a spitter swarm bursts into spitters).
+      -- kind (so a spitter swarm bursts into spitters). horde_member carries over so
+      -- the warning count survives a burst.
       local sh = math.min(surviving_shamblers, survivors)
-      spawn_shamblers(surface, pos, sh, force)
+      spawn_shamblers(surface, pos, sh, force, hm)
       local normal = survivors - sh
-      if normal > 0 then do_spawn(surface, pos, normal, tier, force, nil, kind) end
+      if normal > 0 then do_spawn(surface, pos, normal, tier, force, nil, kind, hm) end
     end
     corpses.drop(surface, pos, corpse_kills, dtype, no_corpse)
     return
@@ -469,6 +494,7 @@ end
 local function forget(un)
   if un == nil then return end
   local z = state()
+  z.horde_units[un] = nil   -- drop from horde tracking too (idempotent, hygiene)
   if z.individuals[un] then
     z.individuals[un] = nil
     z.individual_count = math.max(0, z.individual_count - 1)
@@ -528,10 +554,14 @@ function swarm.swap_cluster(old_entity, new_name)
 
   if rec then
     local newrec = { pop = rec.pop, tier = rec.tier, kind = rec.kind,
-                     shamblers = rec.shamblers, shambler_acc = rec.shambler_acc }
+                     shamblers = rec.shamblers, shambler_acc = rec.shambler_acc,
+                     horde_member = rec.horde_member }
     newrec.label = pop_label(unit, rec.pop)
     z.swarm[unit.unit_number] = newrec
     unit.health = pop_health(unit, rec.pop, rec.tier)
+    -- Carry horde membership across the night day<->night swap, else the warning
+    -- count would drop every time clusters near a player are swapped at dusk/dawn.
+    if rec.horde_member then register_horde_unit(unit) end
   end
   if cmd then pcall(function() unit.commandable.set_command(cmd) end) end
   return unit
@@ -549,6 +579,37 @@ function swarm.pop_of(entity)
   if not (entity and entity.valid and entity.unit_number) then return nil end
   local rec = state().swarm[entity.unit_number]
   return rec and rec.pop or nil
+end
+
+--- The CURRENT horde's live population and pop-weighted centroid, by summing flagged
+--- members (a cluster by its pop, a loose individual as 1) and pruning dead/merged-away
+--- ones on read. Used by the horde warning so its "remaining" count tracks real DEATHS,
+--- not how far the horde has dispersed (the old fixed-radius position scan decayed as
+--- the marching wall spread out). Returns (count, centroid-or-nil).
+function swarm.horde_population()
+  local z = state()
+  local total, sx, sy = 0, 0, 0
+  for un, e in pairs(z.horde_units) do
+    if e and e.valid then
+      local rec = z.swarm[un]
+      local pop = (rec and rec.pop) or 1   -- cluster pop, or 1 for a loose individual
+      total = total + pop
+      local p = e.position
+      sx = sx + p.x * pop; sy = sy + p.y * pop
+    else
+      z.horde_units[un] = nil              -- dead or merged away: prune
+    end
+  end
+  local centroid = total > 0 and { x = sx / total, y = sy / total } or nil
+  return total, centroid
+end
+
+--- Drop ALL horde-membership tracking. Called when a NEW horde begins (lib/horde
+--- begin_active) so a previous horde's survivors can't inflate the new count.
+function swarm.clear_horde_members()
+  local z = state()
+  for un in pairs(z.horde_units) do z.horde_units[un] = nil end
+  for _, rec in pairs(z.swarm) do rec.horde_member = nil end
 end
 
 --- The kind ("biter"/"spitter") of a tracked swarm-unit entity, or nil if untracked.
@@ -592,6 +653,7 @@ function swarm.reset_state()
   storage.zomtorio.swarm = {}
   storage.zomtorio.individuals = {}
   storage.zomtorio.individual_count = 0
+  storage.zomtorio.horde_units = {}
 end
 
 return swarm

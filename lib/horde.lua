@@ -137,13 +137,25 @@ local HORDE_OFFSET = 10 * 32        -- 10 chunks past the factory edge
 -- Small spread of each burst around the horde's spawn point (a tight incoming mass).
 local HORDE_SPAWN_JITTER = 6
 
+-- A horde approaches as a WALL, not single file: each burst is split into COLUMNS
+-- spread along a front line PERPENDICULAR to the approach direction, and each column
+-- targets the factory building nearest IT (not one shared point). Per-column targets
+-- are what keep them in parallel lanes — a single shared target re-funnels everyone
+-- into single file near the base. The front is roughly as wide as the factory's
+-- facing edge (2 x radius), clamped, so you defend your whole frontage.
+local FRONT_MIN_WIDTH = 40          -- a wall even against a tiny base
+local FRONT_MAX_WIDTH = 240
+local FRONT_COLUMN_SPACING = 14     -- one column per ~this many tiles of front
+local FRONT_MIN_COLUMNS = 3
+local FRONT_MAX_COLUMNS = 9
+
 -- Persistent on-map warning: a chart tag labelled with the live remaining horde
 -- count, re-centred on the horde's centroid ~once a second. It lives from event
 -- start (independent of when spawning ends) until the tracked count thins below
--- WARNING_MIN_COUNT (so stragglers / ambient enemies near the centroid can't keep
--- it up forever). WARNING_SCAN_RADIUS bounds the per-update count/centroid scan.
-local WARNING_SCAN_RADIUS = 64
-local WARNING_MIN_COUNT   = 25
+-- WARNING_MIN_COUNT. The count comes from the horde's flagged MEMBERS
+-- (swarm.horde_population), not a position scan, so it can't be inflated by ambient
+-- enemies nor decay as the horde disperses.
+local WARNING_MIN_COUNT = 25
 
 -- Test hook: inject a deterministic factory reference so headless tests don't depend
 -- on whatever player entities happen to be on the shared surface. nil in normal play
@@ -156,6 +168,9 @@ local factory_override = nil
 -- behaviour deterministically; nil in normal play => the live setting / evolution.
 local overrides = {}          -- { enabled, intensity, frequency, night_assault }
 local evolution_override = nil
+-- Test hook: pin the per-event approach angle so a test can orient the wall front
+-- deterministically (the live angle is tick-seeded). nil => the live angle.
+local angle_override = nil
 
 local function opt_enabled()
   if overrides.enabled ~= nil then return overrides.enabled end
@@ -344,16 +359,48 @@ local function march_command(target)
   }
 end
 
---- Spawn one burst of the horde from its single spawn point (with a little jitter),
---- commanded to march on the nearest factory edge. No-op if no origin (shouldn't
---- happen — begin_active always sets one now).
+--- The WALL's per-column spawn points + march targets for the current event
+--- geometry: columns spread along the front line (perpendicular to the approach),
+--- each aimed at the factory building NEAREST it. spawn_horde and the debug hook
+--- share this one source so a test can assert the geometry without spawning.
+local function wall_columns(s, tick)
+  local perp = s.front_perp or { x = 0, y = 1 }
+  local width = s.front_width or FRONT_MIN_WIDTH
+  local cols = clamp(math.floor(width / FRONT_COLUMN_SPACING + 0.5),
+    FRONT_MIN_COLUMNS, FRONT_MAX_COLUMNS)
+  local out = {}
+  for i = 0, cols - 1 do
+    -- spread the column from -width/2 .. +width/2 along the front
+    local frac = (cols > 1) and (i / (cols - 1) - 0.5) or 0
+    local off = frac * width
+    -- a little depth jitter (varied per column) so a column isn't a perfect dot
+    local jx = ((tick * 0.31 + i * 7) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
+    local jy = ((tick * 0.53 + i * 11) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
+    local pos = {
+      x = s.origin.x + perp.x * off + jx,
+      y = s.origin.y + perp.y * off + jy,
+    }
+    -- This column marches on the factory point nearest IT (parallel lanes, no funnel).
+    local target = (s.buildings and #s.buildings > 0)
+      and nearest_building(s.buildings, pos, s.factory_center) or s.target
+    out[#out + 1] = { pos = pos, target = target }
+  end
+  return out
+end
+
+--- Spawn one burst as a broad WALL: split `count` across the front columns, each
+--- spawned at its own point and commanded at the factory building NEAREST it — so the
+--- horde advances in parallel lanes across the whole frontage instead of funnelling
+--- into single file. No-op if no origin (begin_active always sets one now).
 local function spawn_horde(surface, s, count, tier, tick)
   if count <= 0 or not s.origin then return end
-  local jx = ((tick * 0.31) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
-  local jy = ((tick * 0.53) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
-  local pos = { x = s.origin.x + jx, y = s.origin.y + jy }
-  local cmd = s.target and march_command(s.target) or nil
-  swarm.spawn(surface, pos, count, tier, util.ENEMY_FORCE, cmd)
+  local cols = wall_columns(s, tick)
+  local per = math.max(1, math.floor(count / #cols))
+  for _, c in ipairs(cols) do
+    local cmd = c.target and march_command(c.target) or nil
+    -- horde_member=true so the warning can track this horde's live population.
+    swarm.spawn(surface, c.pos, per, tier, util.ENEMY_FORCE, cmd, nil, true)
+  end
 end
 
 --------------------------------------------------- persistent horde warning
@@ -391,36 +438,21 @@ local function start_warning(surface, s, origin, est)
   place_warning_marker(surface, s.warning, s.warning.centroid)
 end
 
---- Count the live horde near the current centroid and re-average its position:
---- swarm CLUSTERS contribute their full population (swarm.pop_of), loose enemies 1
---- each. Approximate (may sweep in some ambient enemies near the centroid) — the
---- <WARNING_MIN_COUNT cutoff stops that keeping the marker up forever.
-local function scan_horde(surface, centroid)
-  local found = surface.find_entities_filtered {
-    type = "unit", force = util.ENEMY_FORCE, position = centroid, radius = WARNING_SCAN_RADIUS,
-  }
-  local count, sx, sy = 0, 0, 0
-  for _, u in pairs(found) do
-    if u.valid then
-      local c = swarm.pop_of(u) or 1
-      count = count + c
-      sx = sx + u.position.x * c; sy = sy + u.position.y * c
-    end
-  end
-  local new_centroid = count > 0 and { x = sx / count, y = sy / count } or centroid
-  return count, new_centroid
-end
-
 --- Drive the persistent warning (~once a second from on_tick), INDEPENDENT of
---- whether spawning is still happening: re-count + re-centre the marker. While the
---- event is still SPAWNING (s.active) the marker never reads as thinned (the live
---- count dips between bursts); once spawning has ended it tracks the real remaining
---- count and retires the marker when the horde drops below WARNING_MIN_COUNT.
+--- whether spawning is still happening: re-count + re-centre the marker. The count
+--- and centroid come from swarm.horde_population() — the live population of THIS
+--- horde's flagged members (clusters by pop + loose individuals), pruned of the dead.
+--- This is dispersion-proof: the count only falls as zombies actually DIE, never
+--- because the marching wall spread far apart (a fixed-radius position scan used to
+--- decay spuriously as the horde fanned out). While the event is still SPAWNING
+--- (s.active) the marker never reads as thinned (the live count dips between bursts);
+--- once spawning has ended it tracks the real remaining count and retires the marker
+--- when the horde drops below WARNING_MIN_COUNT.
 local function update_warning(surface, s)
   local w = s.warning
   if not w then return end
-  local count, centroid = scan_horde(surface, w.centroid)
-  if count > 0 then w.centroid = centroid end
+  local count, centroid = swarm.horde_population()
+  if centroid then w.centroid = centroid end
   if s.active then
     w.count = math.max(count, w.est or count)
   else
@@ -449,14 +481,23 @@ local function begin_active(s, surface, tick, dur, forced)
   s.forced_until = forced and (tick + dur) or nil
   s.warned = true
 
+  -- A fresh horde: forget the previous horde's members so its survivors can't
+  -- inflate this horde's warning count.
+  swarm.clear_horde_members()
+
   local center, radius, buildings = factory_reference(surface)
-  local angle = (tick * 2.3999632) % (2 * math.pi)   -- per-event direction
+  local angle = angle_override or ((tick * 2.3999632) % (2 * math.pi))  -- per-event direction
   local dist = radius + HORDE_OFFSET                 -- beyond the factory edge
   local origin = { x = center.x + math.cos(angle) * dist, y = center.y + math.sin(angle) * dist }
   s.origin = origin
   s.target = nearest_building(buildings, origin, center)  -- nearest base edge
   s.factory_center = center
   s.factory_radius = radius
+  s.buildings = buildings
+  -- Front line for the WALL spread: perpendicular to the approach direction
+  -- (approach is -(cos,sin); ⟂ is (sin,-cos)), as wide as the factory frontage.
+  s.front_perp = { x = math.sin(angle), y = -math.cos(angle) }
+  s.front_width = clamp(2 * radius, FRONT_MIN_WIDTH, FRONT_MAX_WIDTH)
 
   local est = estimate_size(evolution(surface), dur)
   start_warning(surface, s, origin, est)
@@ -613,6 +654,7 @@ function horde.reset_state()
   overrides = {}
   evolution_override = nil
   factory_override = nil
+  angle_override = nil
   storage.zomtorio = storage.zomtorio or {}
   if storage.zomtorio.horde then clear_warning(storage.zomtorio.horde) end
   storage.zomtorio.horde = {
@@ -630,6 +672,21 @@ end
 --- nil restores the live scan.
 function horde.set_factory_override(o)
   factory_override = o
+end
+
+--- Test-only: pin the per-event approach angle (radians), so a test can orient the
+--- wall front deterministically. nil restores the live (tick-seeded) angle.
+function horde.set_angle_override(a)
+  angle_override = a
+end
+
+--- Test-only: the WALL's per-column spawn points + targets for the current event
+--- geometry, so a test can assert the horde spreads across a broad front with
+--- distinct per-column targets (a wall, not single file) without spawning.
+function horde.debug_wall_columns(tick)
+  local s = state()
+  if not s.origin then return {} end
+  return wall_columns(s, tick or (game and game.tick) or 0)
 end
 
 --- Test-only: run one warning update pass on the home surface (like night.sweep_now),

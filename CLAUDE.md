@@ -62,10 +62,20 @@ for their meaning too (melee that cuts a *swarm*; the command that triggers a *h
 - **Hordes (telegraphed attack waves)** — `lib/horde.lua`. Periodic, **night-bound**, telegraphed
   ~1 day ahead; frequency and duration scale with evolution (~10% of a night at evo 0 → a full
   night at evo 1). A horde appears from **one random direction ~10 chunks beyond the factory
-  edge**, marches on the factory, and is marked on the map (a traveling "Horde" chart tag + a
-  `[gps]` chat warning). Plus a smaller ambient **night-escalation** trickle around the player.
-  Settings: `zomtorio-horde-events` (on/off), `-horde-intensity`, `-horde-frequency`,
-  `-night-assault-multiplier`. Manual trigger: **`/zomtorio-horde [minutes]`**.
+  edge** (targets the FACTORY's nearest buildings, not the player — so it works in sandbox). It
+  advances as a **wall**: each burst splits into columns across a front, and each column is a
+  `LuaUnitGroup` commanded at the nearest factory edge → cohesive blobs, not single file. A
+  persistent map **"Horde: N"** chart tag tracks the live remaining count via
+  `swarm.horde_population()` (membership-flagged, so the count only drops on real kills, not from
+  dispersion) and retires under 25; plus a `[gps]` chat warning. A smaller ambient
+  **night-escalation** trickle rings the player. Settings: `zomtorio-horde-events` (on/off),
+  `-horde-intensity`, `-horde-frequency`, `-night-assault-multiplier`. Manual: **`/zomtorio-horde
+  [minutes]`**.
+- **Spitter swarms** — biters vs spitters are still chosen by vanilla engine logic
+  (evolution-gated); a biter/spitter **kind axis** (`tiers.*_BY_KIND`, `tiers.swarm_name(kind,
+  tier)`) means engine-spawned spitters fold into their own violet `zomtorio-swarm-spitter-*`
+  clusters instead of being absorbed into biter swarms. Spitters drop the normal corpse (→ normal
+  reanimation), keeping the kiln/pyre/fuel loop simple.
 
 ## Infection — `lib/infection.lua`, `lib/contagion.lua`
 
@@ -96,6 +106,10 @@ for their meaning too (melee that cuts a *swarm*; the command that triggers a *h
   ends), not an infinite loop. When shamblers fold into a swarm, the swarm tracks its shambler
   count and drops corpses only for the non-shambler share (deterministic error-diffusion split);
   a burst preserves that fraction as shambler individuals.
+- **Zombie pyre** (`prototypes/recipes.lua`) — a 50-wood, 3×3, **no-electricity** (void-energy)
+  furnace that auto-burns inserted corpses at **1 per 3 s** (a results-less burn recipe), so a
+  single inserter feeding it disposes of corpses with no reanimation and no fuel return. Reads as
+  a wooden crate with static glowing embers (always) + flames only while burning.
 
 ## Melee & tech — `lib/melee.lua`, `prototypes/{damage-types,technology,shortcuts,melee-retype}.lua`
 

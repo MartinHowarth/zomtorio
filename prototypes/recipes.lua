@@ -50,6 +50,9 @@ kiln.graphics_set = {
       {
         filename = "__base__/graphics/entity/stone-furnace/stone-furnace.png",
         width = 151, height = 146, scale = 0.6, shift = { 0, -0.05 },
+        -- A cool grey tint so the kiln reads as a distinct ashen building, not a
+        -- plain (warm) stone furnace.
+        tint = { r = 0.55, g = 0.6, b = 0.7, a = 1 },
       },
       {
         filename = "__base__/graphics/entity/stone-furnace/stone-furnace-shadow.png",
@@ -73,7 +76,8 @@ data:extend({
     type = "item",
     name = "zomtorio-corpse-kiln",
     icons = {
-      { icon = "__base__/graphics/icons/stone-furnace.png", icon_size = 64 },
+      { icon = "__base__/graphics/icons/stone-furnace.png", icon_size = 64,
+        tint = { r = 0.55, g = 0.6, b = 0.7, a = 1 } },
       { icon = "__base__/graphics/icons/small-biter.png", icon_size = 64, scale = 0.32, shift = { 10, 10 } },
     },
     subgroup = "production-machine",

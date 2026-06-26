@@ -40,7 +40,7 @@ local function hit(char, opts)
     original_damage_amount = opts.amount or 5,
     final_damage_amount = opts.final_damage ~= nil and opts.final_damage or 5,
     final_health = opts.final_health,
-    damage_type = { name = "physical" },
+    damage_type = { name = opts.damage_type or "physical" },
   }
 end
 
@@ -89,6 +89,34 @@ T.test("non-enemy health drop does not infect the player", function(t)
   hit(char, { force = game.forces.player, final_health = 90 })
 
   t.assert.is_false(infection.is_player_infected(char), "friendly damage => not infected")
+end)
+
+-- ------------------------------------------------- only a bite infects
+-- PURPOSE: only a biter/spitter/worm bite should infect the player (physical or
+-- acid). Enemy-attributed FIRE or EXPLOSION damage (e.g. a dying building's
+-- explosion, a lingering fire) must NOT infect, even though health really dropped
+-- and the source is the enemy force. Guards the damage-type whitelist (R-PINF-2).
+T.test("an enemy fire/explosion hit does NOT infect the player; a bite does", function(t)
+  reset()
+  local char = make_character(t)
+  char.health = 100
+  infection.on_tick { tick = game.tick }  -- snapshot baseline = 100
+
+  -- Real health drop, enemy-caused, but FIRE -> not a bite -> no infection.
+  hit(char, { final_health = 90, damage_type = "fire" })
+  t.assert.is_false(infection.is_player_infected(char), "fire => not infected")
+
+  -- Same for explosion.
+  char.health = 90
+  infection.on_tick { tick = game.tick }
+  hit(char, { final_health = 80, damage_type = "explosion" })
+  t.assert.is_false(infection.is_player_infected(char), "explosion => not infected")
+
+  -- A spitter's acid bite DOES infect.
+  char.health = 80
+  infection.on_tick { tick = game.tick }
+  hit(char, { final_health = 70, damage_type = "acid" })
+  t.assert.is_true(infection.is_player_infected(char), "acid bite => infected")
 end)
 
 -- ---------------------------------------------------------- setting off

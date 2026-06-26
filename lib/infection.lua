@@ -43,6 +43,16 @@ local infection = {}
 -- Our own DoT damage type — recognised so it can't re-trigger infection.
 local INFECTION_DAMAGE_TYPE = "zomtorio-infection"
 
+-- Only an actual BITE infects the player (R-PINF-2): a biter's melee (physical) or
+-- a spitter/worm's acid projectile/splash. Fire, explosion, laser, etc. are NOT
+-- bites and must never infect even when enemy-attributed (e.g. a dying building's
+-- explosion or a lingering acid-vs-fire splash). Whitelist, not blacklist, so any
+-- unforeseen damage type defaults to "does not infect".
+local BITE_DAMAGE_TYPES = {
+  physical = true,  -- biter melee
+  acid = true,      -- spitter / worm projectile + acid splash
+}
+
 -- Aim to visit each infected entity roughly this often (ticks). The elapsed-time
 -- DoT keeps timing exact regardless, so this is purely a UPS-smoothing knob
 -- (R-CONT-7 spirit): spread the set's processing across this many ticks.
@@ -358,6 +368,10 @@ local function on_character_damaged(event)
   -- but never infect an enemy-force character defensively).
   if util.is_enemy_force(entity.force) then return end
   if not is_enemy_caused(event) then return end
+  -- Only a bite infects (R-PINF-2): fire/explosion/etc. damage does not, even when
+  -- enemy-attributed. event.damage_type can be nil for scripted damage; treat that
+  -- as non-bite.
+  if not (event.damage_type and BITE_DAMAGE_TYPES[event.damage_type.name]) then return end
 
   -- Health-damage signal (R-PINF-3): the hit actually reduced HEALTH. We do NOT
   -- use event.final_damage_amount — that is damage after RESISTANCES only, and a

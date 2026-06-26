@@ -160,10 +160,11 @@ pyre.icons = {
 -- One corpse slot in, nothing out (the burn recipe yields nothing).
 pyre.source_inventory_size = 1
 pyre.result_inventory_size = 0
--- Looks like a wooden chest with an ALWAYS-animated fire on top (an ever-burning
--- firepit). The fire lives in `animation` (always drawn), not working_visualisations,
--- so it burns visibly even between corpses. (Sprite paths are GUI-only; the headless
--- engine ships no graphics and does not load/validate them.)
+-- STATIC look (idle AND working): a wooden crate with a partly-opaque molten-ember
+-- overlay on top, so the pit always reads as smouldering coals. The animated FLAMES
+-- are a working-visualisation (below), so they only play while a corpse is actually
+-- burning. (Sprite paths are GUI-only; the headless engine ships no graphics and does
+-- not load/validate them.)
 pyre.graphics_set = {
   animation = {
     layers = {
@@ -172,15 +173,22 @@ pyre.graphics_set = {
         -- ~70% of the 3x3 footprint. The chest fills ~1 tile at scale 0.5, so tiles
         -- ~= scale x 2; 0.7 x 3 = 2.1 tiles -> scale ~1.05.
         width = 62, height = 72, scale = 1.05, shift = { 0, 0.1 },
-        -- A static layer must match the fire layer's frame count (all layers of one
-        -- animation share frame count): repeat the single chest frame to fill 90.
-        frame_count = 1, repeat_count = 90,
       },
       {
-        -- constant flames rising from the pit. Spec copied from the base fire-flame
-        -- (data/base/prototypes/fire-util.lua): fire-flame-01.png is line_length 10,
-        -- 84x130, 90 frames. (The old fire-flame-13.png does not exist - base only
-        -- ships fire-flame-01..04 - which caused the load failure.)
+        -- static, partly-opaque molten embers sitting in the crate's mouth (alpha is
+        -- baked into the PNG by graphics/ember.gen.py). Always drawn.
+        filename = "__zomtorio__/graphics/ember.png",
+        width = 128, height = 128, scale = 0.6, shift = { 0, -0.15 },
+      },
+    },
+  },
+  -- Flames ONLY while burning: a furnace draws working_visualisations only when it is
+  -- actively crafting (default always_draw = false). Spec copied from the base
+  -- fire-flame (data/base/prototypes/fire-util.lua): fire-flame-01.png, line_length
+  -- 10, 84x130, 90 frames.
+  working_visualisations = {
+    {
+      animation = {
         filename = "__base__/graphics/entity/fire-flame/fire-flame-01.png",
         line_length = 10, width = 84, height = 130, frame_count = 90,
         axially_symmetrical = false, direction_count = 1,
@@ -190,9 +198,6 @@ pyre.graphics_set = {
     },
   },
 }
--- A furnace clone carries working_visualisations (the smelting glow); drop them so the
--- only fire is our always-on one.
-pyre.working_visualisations = nil
 
 data:extend({
   pyre,

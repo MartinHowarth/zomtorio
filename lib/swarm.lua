@@ -609,7 +609,16 @@ end
 function swarm.clear_horde_members()
   local z = state()
   for un in pairs(z.horde_units) do z.horde_units[un] = nil end
-  for _, rec in pairs(z.swarm) do rec.horde_member = nil end
+  for k, rec in pairs(z.swarm) do
+    if type(rec) == "table" then
+      rec.horde_member = nil
+    else
+      -- Defensive: a save predating the swarm<->horde rename left the OLD wave-event
+      -- state (booleans/numbers) in this storage slot. It isn't a cluster record;
+      -- prune it so it can't crash this sweep (and so it stops lingering).
+      z.swarm[k] = nil
+    end
+  end
 end
 
 --- The kind ("biter"/"spitter") of a tracked swarm-unit entity, or nil if untracked.

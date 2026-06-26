@@ -90,12 +90,19 @@ for their meaning too (melee that cuts a *swarm*; the command that triggers a *h
   (ground/belt/chest/machine) after a timer. **Kiln-dried** corpses (the corpse-kiln, a
   no-electricity building with a lossy 5→2 recipe) never reanimate but are a net fuel sacrifice.
   Settings: `zomtorio-corpse-reanimation`, `-reanimation-minutes`, `-bot-collect-corpses`.
+- **Bounded reanimation (shamblers).** A corpse reanimates into a **shambler**
+  (`zomtorio-shambler`: a grey, 60%-speed reanimated zombie) — which drops **no corpse** when
+  killed. So the chain is exactly `zombie → corpse → shambler → dead` (one generation, then it
+  ends), not an infinite loop. When shamblers fold into a swarm, the swarm tracks its shambler
+  count and drops corpses only for the non-shambler share (deterministic error-diffusion split);
+  a burst preserves that fraction as shambler individuals.
 
 ## Melee & tech — `lib/melee.lua`, `prototypes/{damage-types,technology,shortcuts,melee-retype}.lua`
 
 - Base melee kills exactly one zombie. Two techs unlock/strengthen **enemy-only swarm-melee
   multi-kill**. A per-player **double-tap** toggle (post-tech shortcut) makes melee kills
-  dead-dead (no corpse, no reanimation).
+  dead-dead (no corpse, no reanimation). Double-tap **defaults ON** for a force once the tech is
+  researched (a force-level default; players opt *out* to harvest corpse fuel).
 
 ## Night aggression — `lib/night.lua`, `prototypes/night.lua`
 

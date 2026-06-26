@@ -87,6 +87,10 @@ function corpses.on_entity_died(event)
   if not util.is_enemy_force(e.force) then return end
   if tiers.SWARM_TO_TIER[e.name] ~= nil then return end  -- a cluster, not an individual
 
+  -- A shambler is an ALREADY-reanimated zombie: it drops NO corpse, so the chain
+  -- (zombie -> corpse -> shambler -> dead) terminates after one generation.
+  if tiers.is_shambler(e.name) then return end
+
   -- A double-tap melee kill is dead-dead: no corpse, so it can't reanimate
   -- (R-MELEE-5). Melee types are otherwise NOT no-corpse — they drop normally.
   local no_corpse = melee.is_dead_dead(event)

@@ -25,6 +25,17 @@ tiers.SWARM = {
   big    = "zomtorio-swarm-big",
 }
 
+-- The shambler: a REANIMATED zombie (corpse spoiled -> shambler). A distinct,
+-- grey-tinted, slower prototype. Killing a shambler drops NO corpse, so the
+-- reanimation chain terminates after exactly one generation (zombie -> corpse ->
+-- shambler -> dead). It's an individual, NOT a cluster, so it is deliberately kept
+-- out of SWARM_TO_TIER; when folded into a swarm the swarm tracks its count.
+tiers.SHAMBLER = "zomtorio-shambler"
+
+function tiers.is_shambler(name)
+  return name == tiers.SHAMBLER
+end
+
 -- Suffix that turns any day prototype into its faster night variant (R-NIGHT).
 -- Defined here so the data stage (prototypes/night.lua), the tuning pass
 -- (prototypes/tuning.lua) and the runtime swap (lib/night.lua) all agree on it.

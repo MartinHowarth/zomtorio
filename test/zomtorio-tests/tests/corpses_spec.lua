@@ -223,13 +223,13 @@ T.test("a spoiled corpse reanimates into an enemy zombie", {
   { after = 5, fn = function(t)
     local o = t.test_origin
     if t.forced then
-      local biters = t.surface.find_entities_filtered {
-        name = "small-biter", position = o, radius = 16, force = "enemy",
+      local shamblers = t.surface.find_entities_filtered {
+        name = tiers.SHAMBLER, position = o, radius = 16, force = "enemy",
       }
-      t.assert.at_least(1, #biters, "the spoiled corpse hatched an enemy zombie")
+      t.assert.at_least(1, #shamblers, "the spoiled corpse hatched an enemy shambler")
     else
       -- Fallback: forcing spoilage unsupported headless. Assert the prototype
-      -- trigger is wired to create an enemy-force small-biter. Read-back shape is
+      -- trigger is wired to create an enemy-force SHAMBLER. Read-back shape is
       -- the runtime SpoilToTriggerResult concept: `trigger` is an array of trigger
       -- items, each with an array of action_delivery (NOT the flat data-table shape).
       local trig = prototypes.item[CORPSE_ITEM].spoil_to_trigger_result
@@ -239,11 +239,39 @@ T.test("a spoiled corpse reanimates into an enemy zombie", {
       local delivery = item.action_delivery[1]
       t.assert.not_nil(delivery, "trigger item has an action delivery")
       local eff = delivery.source_effects[1]
-      t.assert.equal("small-biter", eff.entity_name, "spoils into a small-biter")
-      t.assert.is_true(eff.as_enemy == true, "the hatched zombie is on the enemy force")
+      t.assert.equal(tiers.SHAMBLER, eff.entity_name, "spoils into a shambler")
+      t.assert.is_true(eff.as_enemy == true, "the hatched shambler is on the enemy force")
     end
   end },
 })
+
+-- ------------------------------------- shambler: bounded reanimation (the chain ends)
+-- A shambler is a reanimated zombie; killing it drops NO corpse, so it cannot
+-- reanimate again. This is what stops infinite reanimation.
+T.test("a shambler's death drops no corpse (reanimation chain terminates)", function(t)
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  local shambler = t.world.place(t.surface, tiers.SHAMBLER, o, { force = "enemy" })
+  t.assert.not_nil(shambler, "shambler placed")
+
+  corpses.on_entity_died { entity = shambler, damage_type = { name = "physical" } }
+
+  t.assert.equal(0, ground_corpses(t.surface, o),
+    "a shambler leaves no corpse -> nothing to reanimate")
+end)
+
+-- The shambler prototype exists, is slower than the basic zombie, and is its own
+-- enemy unit (so reanimation produces it, not a fresh biter).
+T.test("the shambler prototype is a slow (60%) enemy unit", function(t)
+  local sh = prototypes.entity[tiers.SHAMBLER]
+  local small = prototypes.entity["small-biter"]
+  t.assert.not_nil(sh, "shambler prototype exists")
+  t.assert.equal("unit", sh.type, "shambler is a unit")
+  -- ~60% of the tuned small-biter speed (allow a hair of float slack).
+  local expected = small.speed * 0.6
+  t.assert.at_least(expected - 0.0001, sh.speed, "shambler speed >= 60% of small-biter")
+  t.assert.at_least(sh.speed, expected + 0.0001, "shambler speed <= 60% of small-biter")
+end)
 
 -- ============================================================================
 -- Feature A: reanimation routed through the dynamic cap (R-HORDE-6 / R-GEN-6).

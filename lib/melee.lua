@@ -47,13 +47,17 @@ local TIER_1_DAMAGE = 30
 local TIER_2_DAMAGE = 80
 
 --------------------------------------------------------------------- storage
--- storage.zomtorio.melee.double_tap : player_index -> true/false
+-- storage.zomtorio.melee.double_tap : player_index -> true/false  (EXPLICIT choice;
+--   only set when the player toggles the shortcut — overrides the force default)
+-- storage.zomtorio.melee.force_on   : force_name -> true  (double-tap defaults ON
+--   once that force researches the unlocking tech; R-MELEE-5 default-on)
 
 local function state()
   storage.zomtorio = storage.zomtorio or {}
   local z = storage.zomtorio
-  z.melee = z.melee or { double_tap = {} }
+  z.melee = z.melee or { double_tap = {}, force_on = {} }
   z.melee.double_tap = z.melee.double_tap or {}
+  z.melee.force_on = z.melee.force_on or {}
   return z.melee
 end
 
@@ -128,22 +132,31 @@ local function player_index_of(cause)
   return nil
 end
 
---- Is double-tap currently on for this player? (Read by is_dead_dead.)
-function melee.double_tap_on(player_index)
-  if player_index == nil then return false end
-  return state().double_tap[player_index] == true
+--- Is double-tap effectively ON for this player on this force? An EXPLICIT
+--- per-player toggle wins; otherwise it defaults ON once the force has researched
+--- the unlocking tech (force_on), so kills are dead-dead by default after unlock
+--- (the player opts OUT to harvest corpse fuel). force may be nil.
+function melee.is_on_for(player_index, force)
+  local s = state()
+  local explicit
+  if player_index ~= nil then explicit = s.double_tap[player_index] end
+  if explicit ~= nil then return explicit == true end
+  if force and force.valid and s.force_on[force.name] then return true end
+  return false
 end
 
 --- Should this kill leave NO corpse (R-MELEE-5)? True only when the damage type
---- is a melee type AND the causing player has double-tap ON. Consulted by both
---- the individual (corpses.on_entity_died) and cluster (horde.on_entity_damaged)
---- corpse-drop paths so both kinds of melee kill are dead-dead under double-tap.
+--- is a melee type AND double-tap is on (explicit toggle, or the force default once
+--- the tech is researched). Consulted by both the individual (corpses.on_entity_died)
+--- and cluster (swarm.on_entity_damaged) corpse-drop paths.
 function melee.is_dead_dead(event)
   if not event then return false end
   local dtype = event.damage_type and event.damage_type.name
   if dtype ~= BASE_MELEE_TYPE and dtype ~= SWARM_MELEE_TYPE then return false end
   if double_tap_override ~= nil then return double_tap_override end
-  return melee.double_tap_on(player_index_of(event.cause))
+  local cause = event.cause
+  local force = (cause and cause.valid and cause.force) or nil
+  return melee.is_on_for(player_index_of(cause), force)
 end
 
 --- Toggle double-tap for the acting player when our shortcut is pressed, gated on
@@ -155,23 +168,42 @@ function melee.on_toggle_shortcut(event)
   if not (player and player.valid) then return end
   if not researched(player.force, TIER_2) then return end  -- not yet unlocked
 
+  -- Toggle relative to the EFFECTIVE state (which may be on via the force default),
+  -- so the first press after unlock turns it OFF rather than re-confirming ON.
   local s = state()
-  local now = not (s.double_tap[event.player_index] == true)
+  local now = not melee.is_on_for(event.player_index, player.force)
   s.double_tap[event.player_index] = now
   player.set_shortcut_toggled(SHORTCUT, now)
 end
 
---- Make the double-tap shortcut available to a force's players once Tier 2 is
---- researched (R-MELEE-5: unlocked by a melee technology). Cheap and idempotent.
+--- When a force researches Tier 2 (R-MELEE-5: unlocks double-tap), make double-tap
+--- DEFAULT ON for that force and reflect it on every current player's shortcut
+--- (available + toggled-on). Players opt out by toggling. Cheap and idempotent.
 function melee.on_research_finished(event)
   local research = event and event.research
   if not (research and research.valid) then return end
   if research.name ~= TIER_2 then return end
   local force = research.force
   if not (force and force.valid) then return end
+  state().force_on[force.name] = true
   for _, player in pairs(force.players) do
-    if player.valid then player.set_shortcut_available(SHORTCUT, true) end
+    if player.valid then
+      player.set_shortcut_available(SHORTCUT, true)
+      player.set_shortcut_toggled(SHORTCUT, true)
+    end
   end
+end
+
+--- A player created on a force that already unlocked double-tap gets it available
+--- and toggled-on (the force default already makes it effective). control.lua wires
+--- this to on_player_created.
+function melee.on_player_created(event)
+  if not event then return end
+  local player = game.get_player(event.player_index)
+  if not (player and player.valid) then return end
+  if not state().force_on[player.force.name] then return end
+  player.set_shortcut_available(SHORTCUT, true)
+  player.set_shortcut_toggled(SHORTCUT, true)
 end
 
 --- Drop a removed player's toggle state so the table can't accumulate stale keys.
@@ -194,7 +226,7 @@ end
 --- slate between cases.
 function melee.reset_state()
   storage.zomtorio = storage.zomtorio or {}
-  storage.zomtorio.melee = { double_tap = {} }
+  storage.zomtorio.melee = { double_tap = {}, force_on = {} }
   double_tap_override = nil
 end
 

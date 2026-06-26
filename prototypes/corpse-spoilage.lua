@@ -12,17 +12,21 @@
 -- which hatches HOSTILE pentapods from exactly this mechanic: the create-entity
 -- effect carries `as_enemy = true`, which places the new unit on the enemy force.
 
+local tiers = require("lib.tiers")
+
 local corpse = data.raw.item["zomtorio-corpse"]
 
 if corpse and settings.startup["zomtorio-corpse-reanimation"].value then
   local minutes = settings.startup["zomtorio-reanimation-minutes"].value
   corpse.spoil_ticks = math.max(1, math.floor(minutes * 3600))  -- 60 ticks/s * 60
 
-  -- The reanimated zombie is an individual small-biter on the enemy force. The
-  -- structure (direct trigger -> instant delivery -> create-entity with
-  -- as_enemy) is copied from the pentapod-egg so freshly-spoiled corpses are
-  -- immediately hostile, and a non-colliding-position fallback mirrors the egg's
-  -- so a corpse spoiling in a tight space still hatches.
+  -- The reanimated unit is a SHAMBLER on the enemy force (NOT a fresh biter): a
+  -- shambler drops no corpse when killed, so the reanimation chain terminates after
+  -- one generation (zombie -> corpse -> shambler -> dead). The structure (direct
+  -- trigger -> instant delivery -> create-entity with as_enemy) is copied from the
+  -- pentapod-egg so freshly-spoiled corpses are immediately hostile, and a
+  -- non-colliding-position fallback mirrors the egg's so a corpse spoiling in a
+  -- tight space still hatches.
   corpse.spoil_to_trigger_result = {
     items_per_trigger = 1,
     trigger = {
@@ -32,14 +36,14 @@ if corpse and settings.startup["zomtorio-corpse-reanimation"].value then
         source_effects = {
           {
             type = "create-entity",
-            entity_name = "small-biter",
+            entity_name = tiers.SHAMBLER,
             affects_target = true,
             show_in_tooltip = true,
             as_enemy = true,                 -- => enemy force, hostile zombie
-            -- Raise on_trigger_created_entity per hatched zombie so the runtime
+            -- Raise on_trigger_created_entity per hatched shambler so the runtime
             -- can route reanimations through the dynamic cap (R-HORDE-6 /
             -- R-GEN-6): under-cap ones stay individuals, overflow folds into a
-            -- cluster. See lib/corpses.on_trigger_created_entity.
+            -- cluster (as shamblers). See lib/swarm.on_trigger_created_entity.
             trigger_created_entity = true,
             find_non_colliding_position = true,
             offset_deviation = { { -2, -2 }, { 2, 2 } },
@@ -50,7 +54,7 @@ if corpse and settings.startup["zomtorio-corpse-reanimation"].value then
                 source_effects = {
                   {
                     type = "create-entity",
-                    entity_name = "small-biter",
+                    entity_name = tiers.SHAMBLER,
                     affects_target = true,
                     as_enemy = true,
                     trigger_created_entity = true,

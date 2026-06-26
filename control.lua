@@ -125,6 +125,11 @@ script.on_event(defines.events.on_research_finished, function(event)
 end)
 
 ------------------------------------------------------------------- players
+-- A new player on a force that already unlocked double-tap gets it on by default.
+script.on_event(defines.events.on_player_created, function(event)
+  melee.on_player_created(event)
+end)
+
 -- Drop per-player melee toggle state when a player is removed.
 script.on_event(defines.events.on_player_removed, function(event)
   melee.on_player_removed(event)

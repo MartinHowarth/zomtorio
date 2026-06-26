@@ -213,3 +213,31 @@ T.test("a base-melee kill drops a corpse without double-tap", function(t)
   t.assert.at_least(1, ground_corpses(t.surface, o),
     "base-melee kill drops a corpse normally")
 end)
+
+-- ------------------------------ double-tap defaults ON once researched (R-MELEE-5)
+-- The double-tap toggle auto-enables for a force the moment it researches the
+-- unlocking tech (the player opts OUT to harvest corpse fuel). Verified without a
+-- connected player via the force-level default that is_dead_dead falls back to.
+T.test("double-tap is on by default once the unlocking tech is researched", function(t)
+  reset()
+  clear_tech()
+  local force = game.forces.player
+
+  t.assert.is_false(melee.is_on_for(nil, force), "off before the tech is researched")
+
+  force.technologies[TIER_2].researched = true
+  melee.on_research_finished { research = force.technologies[TIER_2] }
+  t.assert.is_true(melee.is_on_for(nil, force), "default ON once researched")
+
+  -- A melee kill caused by a player-force entity is dead-dead by default (no
+  -- explicit toggle): is_dead_dead falls back to the force default.
+  local o = t.test_origin
+  t.world.clear(t.surface, o)
+  local dealer = t.world.place(t.surface, "character", o, { force = "player" })
+  t.assert.is_true(
+    melee.is_dead_dead { damage_type = { name = SWARM_MELEE }, cause = dealer },
+    "a melee kill is dead-dead by default after the tech is researched")
+
+  clear_tech()
+  melee.reset_state()  -- clear the force default so later specs aren't affected
+end)

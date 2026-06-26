@@ -27,6 +27,23 @@ local CLUSTER_OFFSETS = {
 -- Tint each biter in the clump a sickly green so it reads as distinct from a lone biter.
 local CLUSTER_TINT = { r = 0.55, g = 0.85, b = 0.45, a = 1.0 }
 
+-- A shambler reads as a washed-out, grey zombie (a reanimated corpse).
+local SHAMBLER_TINT = { r = 0.6, g = 0.6, b = 0.6, a = 1.0 }
+
+--- Tint an animation's (non-shadow) layers a flat colour, without offsetting them.
+--- Used for the single-biter shambler (unlike clump(), which also replicates).
+local function tint_anim(anim, tint)
+  if type(anim) ~= "table" then return anim end
+  local src = anim.layers or { anim }
+  local layers = {}
+  for _, layer in ipairs(src) do
+    local c = util.table.deepcopy(layer)
+    if not c.draw_as_shadow then c.tint = tint end
+    layers[#layers + 1] = c
+  end
+  return { layers = layers }
+end
+
 -- A cluster's health is pure ONE-SHOT HEADROOM, not a representation of population
 -- (the script owns deaths; pop lives in storage). It just has to exceed the largest
 -- single damage INSTANCE a cluster might take, so the engine can't wipe a whole swarm
@@ -79,6 +96,23 @@ for _, tier in ipairs(tiers.ORDER) do
 
     new_protos[#new_protos + 1] = horde
   end
+end
+
+-- The shambler: a grey, reanimated small-biter (corpse -> spoil -> shambler). It
+-- drops no corpse on death (lib/corpses), terminating the reanimation chain. Its
+-- stats (slower, weak) are set in prototypes/tuning.lua at data-final-fixes.
+local shambler_src = data.raw.unit[tiers.INDIVIDUAL.small]
+if shambler_src then
+  local shambler = util.table.deepcopy(shambler_src)
+  shambler.name = tiers.SHAMBLER
+  shambler.order = (shambler.order or "b") .. "-zomtorio-shambler"
+  if shambler.run_animation then
+    shambler.run_animation = tint_anim(shambler.run_animation, SHAMBLER_TINT)
+  end
+  if shambler.attack_parameters and shambler.attack_parameters.animation then
+    shambler.attack_parameters.animation = tint_anim(shambler.attack_parameters.animation, SHAMBLER_TINT)
+  end
+  new_protos[#new_protos + 1] = shambler
 end
 
 if #new_protos > 0 then

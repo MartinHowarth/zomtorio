@@ -170,12 +170,14 @@ local function apply_command(entity, command)
 end
 
 --- Create one swarm-unit entity holding `pop`, record it, size its health.
-local function create_cluster(surface, pos, pop, tier, force, command)
+--- `shamblers` (default 0) is how many of `pop` are reanimated shamblers that drop
+--- no corpse on death — tracked so proportional corpse drops survive folding.
+local function create_cluster(surface, pos, pop, tier, force, command, shamblers)
   local name = tiers.SWARM[tier]
   local place = surface.find_non_colliding_position(name, pos, 16, 0.5) or pos
   local unit = surface.create_entity { name = name, position = place, force = force }
   if not (unit and unit.valid) then return nil end
-  local rec = { pop = pop, tier = tier }
+  local rec = { pop = pop, tier = tier, shamblers = math.min(shamblers or 0, pop), shambler_acc = 0 }
   rec.label = pop_label(unit, pop)
   state().swarm[unit.unit_number] = rec
   unit.health = pop_health(unit, pop, tier)
@@ -223,6 +225,29 @@ local function do_spawn(surface, pos, count, tier, force, command)
   end
 end
 
+--- Spawn `n` reanimated-shambler individuals near `pos`, cap-aware: real shambler
+--- entities up to the cap, folding any overflow into a swarm AS SHAMBLERS. Used by
+--- the burst path so a bursting swarm's shambler share stays shamblers (no corpse).
+local function spawn_shamblers(surface, pos, n, force)
+  n = math.floor(n or 0)
+  if n <= 0 then return end
+  force = force or util.ENEMY_FORCE
+  local make = math.min(n, cap_room())
+  local made = 0
+  for _ = 1, make do
+    local place = surface.find_non_colliding_position(tiers.SHAMBLER, pos, 16, 0.5) or pos
+    local s = surface.create_entity { name = tiers.SHAMBLER, position = place, force = force }
+    if s and s.valid then
+      track_individual(s)
+      made = made + 1
+    end
+  end
+  local overflow = n - made
+  if overflow > 0 then
+    swarm.fold(surface, pos, overflow, "small", force, overflow)
+  end
+end
+
 --------------------------------------------------------------------- public
 
 --- Unified spawner (R-HORDE-6 / R-GEN-6) and the single point where the overall
@@ -256,12 +281,16 @@ end
 --- merge into an existing tracked cluster of the same `tier` within a small radius
 --- of `pos` (growing it) rather than littering the area with tiny clusters; only
 --- if none exists do we create new cluster(s), split by MAX_CLUSTER_POP.
-function swarm.fold(surface, pos, count, tier, force)
+--- `shambler_count` (optional, default 0): how many of `count` are reanimated
+--- shamblers (no-corpse-on-death). Carried into the merged/created cluster so the
+--- swarm drops corpses only for its non-shambler share.
+function swarm.fold(surface, pos, count, tier, force, shambler_count)
   count = math.floor(count or 0)
   if count <= 0 then return end
   if not (surface and surface.valid) then return end
   if not tiers.is_valid(tier) then tier = "small" end
   force = force or util.ENEMY_FORCE
+  shambler_count = math.min(math.floor(shambler_count or 0), count)
 
   local z = state()
 
@@ -275,6 +304,7 @@ function swarm.fold(surface, pos, count, tier, force)
       local rec = z.swarm[unit.unit_number]
       if rec then
         rec.pop = rec.pop + count
+        rec.shamblers = math.min((rec.shamblers or 0) + shambler_count, rec.pop)
         unit.health = pop_health(unit, rec.pop, tier)
         update_label(rec)
         return
@@ -283,10 +313,13 @@ function swarm.fold(surface, pos, count, tier, force)
   end
 
   -- No mergeable cluster: create new one(s), split so none holds an absurd pop.
+  -- Distribute the shambler share across the split chunks.
   local remainder = count
   while remainder > 0 do
     local pop = math.min(remainder, MAX_CLUSTER_POP)
-    create_cluster(surface, pos, pop, tier, force)
+    local sh = math.min(shambler_count, pop)
+    shambler_count = shambler_count - sh
+    create_cluster(surface, pos, pop, tier, force, nil, sh)
     remainder = remainder - pop
   end
 end
@@ -310,18 +343,23 @@ function swarm.on_trigger_created_entity(event)
   -- entirely untouched.
   if entity.type ~= "unit" then return end
   if not util.is_enemy_force(entity.force) then return end
-  local tier = INDIVIDUAL_TO_TIER[entity.name]
+  -- Our reanimated units are SHAMBLERS (corpse spoilage), but accept a plain
+  -- individual tier too (defensive / other spawn paths). Shamblers map to "small".
+  local is_shambler = tiers.is_shambler(entity.name)
+  local tier = INDIVIDUAL_TO_TIER[entity.name] or (is_shambler and "small") or nil
   if tier == nil then return end
 
   if cap_room() > 0 then
-    -- Under the cap: it stays a real individual and now counts against the cap.
+    -- Under the cap: it stays a real individual (already the shambler prototype, so
+    -- it drops no corpse on death) and now counts against the cap.
     track_individual(entity)
   else
     -- Cap full: remove the hatched individual and fold it into a cluster (merged
-    -- into a nearby one by swarm.fold, so a spoiling pile accumulates into one).
+    -- into a nearby one by swarm.fold, so a spoiling pile accumulates into one). A
+    -- shambler folds in as a shambler (the swarm tracks how many won't drop corpses).
     local surface, pos = entity.surface, entity.position
     entity.destroy()
-    swarm.fold(surface, pos, 1, tier, util.ENEMY_FORCE)
+    swarm.fold(surface, pos, 1, tier, util.ENEMY_FORCE, is_shambler and 1 or 0)
   end
 end
 
@@ -355,28 +393,51 @@ function swarm.on_entity_damaged(event)
   -- the killed population leaves no corpse — same rule as for individual zombies.
   local no_corpse = melee.is_dead_dead(event)
 
+  -- Decide how many of the killed zombies are SHAMBLERS (drop no corpse) vs normal
+  -- (drop a corpse), proportional to the swarm's current shambler share, via an
+  -- error-diffusion accumulator: deterministic and exact over many hits, no RNG.
+  -- This loop also performs the population decrement (rec.pop -= removed).
+  rec.shamblers = rec.shamblers or 0
+  rec.shambler_acc = rec.shambler_acc or 0
+  local removed = math.min(kills, rec.pop)
+  local corpse_kills = 0
+  for _ = 1, removed do
+    if rec.pop <= 0 then break end
+    local frac = rec.shamblers / rec.pop
+    rec.shambler_acc = rec.shambler_acc + frac
+    if rec.shambler_acc >= 1 and rec.shamblers > 0 then
+      rec.shambler_acc = rec.shambler_acc - 1
+      rec.shamblers = rec.shamblers - 1          -- a shambler died: no corpse
+    else
+      corpse_kills = corpse_kills + 1            -- a normal zombie died: corpse
+    end
+    rec.pop = rec.pop - 1
+  end
+
   -- Burst: cap has room AND a player is near -> the cluster becomes real. The
-  -- killed zombies are gone; the survivors spawn as individuals (R-HORDE-4).
+  -- killed zombies are gone; the survivors spawn as individuals (R-HORDE-4),
+  -- preserving the surviving shambler fraction as shambler individuals.
   if cap_room() > 0 and character_near(surface, pos) then
-    local survivors = rec.pop - kills
+    local survivors = rec.pop                    -- already decremented above
+    local surviving_shamblers = rec.shamblers
     z.swarm[entity.unit_number] = nil
     entity.destroy()
     if survivors > 0 then
-      -- Survivors are an EXISTING (already-scaled) population — re-spawn them
-      -- without re-applying the swarm-size multiplier (use do_spawn, not spawn).
-      do_spawn(surface, pos, survivors, tier, force)
+      -- Survivors are an EXISTING (already-scaled) population — re-spawn without
+      -- re-applying the swarm-size multiplier (do_spawn, not spawn). Shamblers
+      -- first (cap-aware), then the normal remainder.
+      local sh = math.min(surviving_shamblers, survivors)
+      spawn_shamblers(surface, pos, sh, force)
+      local normal = survivors - sh
+      if normal > 0 then do_spawn(surface, pos, normal, tier, force) end
     end
-    -- The zombies the hit killed drop corpses (skipped for flame/explosion/
-    -- double-tap); a hit can't kill more than the cluster held.
-    corpses.drop(surface, pos, math.min(kills, rec.pop), dtype, no_corpse)
+    corpses.drop(surface, pos, corpse_kills, dtype, no_corpse)
     return
   end
 
-  -- Otherwise lose population. The script is the only thing that kills the unit.
-  -- Corpses dropped = zombies ACTUALLY removed (a hit can't kill more than the
-  -- cluster holds), skipped for flame/explosion (R-CORPSE-4) / double-tap.
-  local removed = math.min(kills, rec.pop)
-  rec.pop = rec.pop - kills
+  -- Otherwise just lose population. The script is the only thing that kills the
+  -- unit. Corpses drop only for the non-shambler kills (and never for flame/
+  -- explosion/double-tap, which corpses.drop suppresses).
   if rec.pop <= 0 then
     z.swarm[entity.unit_number] = nil
     entity.destroy()
@@ -384,7 +445,7 @@ function swarm.on_entity_damaged(event)
     entity.health = pop_health(entity, rec.pop, tier)
     update_label(rec)
   end
-  corpses.drop(surface, pos, removed, dtype, no_corpse)
+  corpses.drop(surface, pos, corpse_kills, dtype, no_corpse)
 end
 
 --- Idempotent removal from our bookkeeping. Safe to call from several remove

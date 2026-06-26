@@ -41,6 +41,20 @@ local function find_cluster(surface, pos, tier)
   return found[1]
 end
 
+--- Total corpse items on the ground near `pos` (each spilled stack is one entity).
+local function ground_corpses(surface, pos, radius)
+  local found = surface.find_entities_filtered {
+    name = "item-on-ground", position = pos, radius = radius or 24,
+  }
+  local total = 0
+  for _, e in ipairs(found) do
+    if e.valid and e.stack and e.stack.valid_for_read and e.stack.name == "zomtorio-corpse" then
+      total = total + e.stack.count
+    end
+  end
+  return total
+end
+
 --- Hit a swarm unit: apply the real engine damage, then drive the handler on the
 --- module instance whose storage holds the cluster (see header note).
 local function hit(entity, amount, damage_type, final)
@@ -228,4 +242,63 @@ T.test("a cluster dies and is cleared when its population reaches 0", function(t
   end
   t.assert.is_false(cluster.valid, "cluster destroyed at pop 0")
   t.assert.equal(nil, swarm.pop_of(cluster), "its storage record is cleared")
+end)
+
+-- ------------------------------------------------------- shambler share in a swarm
+-- A swarm tracks how many of its population are reanimated SHAMBLERS (no corpse on
+-- death). As it loses population, corpses drop only for the non-shambler share,
+-- split deterministically (error-diffusion accumulator). A pop-10 swarm with 5
+-- shamblers, killed one at a time, drops exactly 5 corpses.
+T.test("a swarm drops corpses only for its non-shambler share (deterministic)", function(t)
+  reset(0)  -- cap full: no individuals/burst, pure decrement
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 24)
+  swarm.fold(t.surface, o, 10, "small", "enemy", 5)   -- pop 10, 5 shamblers
+  local cluster = find_cluster(t.surface, o, "small")
+  t.assert.not_nil(cluster, "cluster exists")
+
+  for _ = 1, 10 do
+    if cluster.valid then hit(cluster, 5, "physical") end
+  end
+  t.assert.equal(5, ground_corpses(t.surface, o),
+    "only the 5 non-shambler kills drop a corpse")
+end)
+
+-- Regression: a swarm with NO shamblers drops a corpse for every normal kill.
+T.test("a swarm with no shamblers drops a corpse for every kill", function(t)
+  reset(0)
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 24)
+  swarm.fold(t.surface, o, 4, "small", "enemy", 0)
+  local cluster = find_cluster(t.surface, o, "small")
+  t.assert.not_nil(cluster, "cluster exists")
+
+  for _ = 1, 4 do
+    if cluster.valid then hit(cluster, 5, "physical") end
+  end
+  t.assert.equal(4, ground_corpses(t.surface, o), "all 4 normal kills drop a corpse")
+end)
+
+-- Bursting a swarm preserves its shambler fraction: the surviving shamblers become
+-- shambler individuals (not normal biters), so they still won't drop corpses.
+T.test("bursting preserves the shambler fraction as shambler individuals", function(t)
+  reset(1000)
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 24)
+  -- Force a cluster with known shamblers while the cap is momentarily full.
+  set_cap(0)
+  swarm.fold(t.surface, o, 12, "small", "enemy", 6)   -- pop 12, 6 shamblers
+  local cluster = find_cluster(t.surface, o, "small")
+  t.assert.not_nil(cluster, "cluster exists before burst")
+  set_cap(1000)
+
+  t.world.place(t.surface, "character", { x = o.x + 2, y = o.y }, { force = "player" })
+  hit(cluster, 5, "physical")  -- kills 1 (a normal), bursts the other 11
+
+  t.assert.is_false(cluster.valid, "the cluster burst")
+  local shamblers = t.surface.find_entities_filtered {
+    name = tiers.SHAMBLER, position = o, radius = 32, force = "enemy",
+  }
+  t.assert.at_least(6, #shamblers,
+    "the surviving shambler share burst as shambler individuals")
 end)

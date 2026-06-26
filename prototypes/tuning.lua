@@ -93,6 +93,22 @@ if small and (not small.max_health or small.max_health > PUNCH_DAMAGE) then
   small.max_health = PUNCH_DAMAGE
 end
 
+-- Shambler (reanimated zombie): same weak basic zombie, but SHUFFLING — 60% of the
+-- (already-tuned) small-biter speed. Cloned from small-biter at the data stage so
+-- it still carries vanilla stats here; set them from the now-tuned small-biter. Its
+-- name has no "biter", so the loop above skipped it.
+local shambler = data.raw.unit[tiers.SHAMBLER]
+if shambler and small then
+  if shambler.collision_box then
+    shambler.collision_box = scale_box(shambler.collision_box, COLLISION_SCALE)
+  end
+  shambler.movement_speed = (small.movement_speed or 0.1) * 0.6
+  shambler.max_health = small.max_health
+  shambler.pollution_to_join_attack = small.pollution_to_join_attack
+  shambler.min_pursue_time = PURSUE_FOREVER
+  shambler.max_pursue_distance = PURSUE_FOREVER
+end
+
 ------------------------------------------------------------------- horde clusters
 -- Clusters DON'T contain "biter", so the loop above missed them. A cluster must
 -- move at the tuned day-zombie pace (not vanilla pace), and pack tightly like the

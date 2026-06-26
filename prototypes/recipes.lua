@@ -157,13 +157,16 @@ pyre.graphics_set = {
         filename = "__base__/graphics/entity/wooden-chest/wooden-chest.png",
         width = 62, height = 72, scale = 3.0, shift = { 0, 0.1 },
         -- A static layer must match the fire layer's frame count (all layers of one
-        -- animation share frame count): repeat the single chest frame 25 times.
-        frame_count = 1, repeat_count = 25,
+        -- animation share frame count): repeat the single chest frame to fill 90.
+        frame_count = 1, repeat_count = 90,
       },
       {
-        -- constant flames rising from the pit
-        filename = "__base__/graphics/entity/fire-flame/fire-flame-13.png",
-        line_length = 8, width = 60, height = 118, frame_count = 25,
+        -- constant flames rising from the pit. Spec copied from the base fire-flame
+        -- (data/base/prototypes/fire-util.lua): fire-flame-01.png is line_length 10,
+        -- 84x130, 90 frames. (The old fire-flame-13.png does not exist - base only
+        -- ships fire-flame-01..04 - which caused the load failure.)
+        filename = "__base__/graphics/entity/fire-flame/fire-flame-01.png",
+        line_length = 10, width = 84, height = 130, frame_count = 90,
         axially_symmetrical = false, direction_count = 1,
         blend_mode = "additive", draw_as_glow = true,
         animation_speed = 0.5, scale = 1.8, shift = { 0, -0.8 },

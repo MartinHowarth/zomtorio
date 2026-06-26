@@ -214,13 +214,17 @@ end
 --- discard. The burst path uses this directly to re-spawn an already-existing
 --- (already-scaled) surviving population — applying the multiplier there too would
 --- scale it twice.
+--- Returns the list of entities it created (the loose individuals + any cluster
+--- unit(s)), so a caller (the horde event) can gather them into a unit group.
 local function do_spawn(surface, pos, count, tier, force, command, kind, horde_member)
   count = math.floor(count or 0)
-  if count <= 0 then return end
-  if not (surface and surface.valid) then return end
+  if count <= 0 then return {} end
+  if not (surface and surface.valid) then return {} end
   if not tiers.is_valid(tier) then tier = "small" end
   force = force or util.ENEMY_FORCE
   kind = kind or "biter"
+
+  local made_entities = {}
 
   -- 1/2. Real individuals up to the cap.
   local make_individuals = math.min(count, cap_room())
@@ -235,6 +239,7 @@ local function do_spawn(surface, pos, count, tier, force, command, kind, horde_m
       track_individual(zombie)
       if horde_member then register_horde_unit(zombie) end
       apply_command(zombie, command)
+      made_entities[#made_entities + 1] = zombie
       made = made + 1
     end
   end
@@ -244,9 +249,12 @@ local function do_spawn(surface, pos, count, tier, force, command, kind, horde_m
   local remainder = count - made
   while remainder > 0 do
     local pop = math.min(remainder, MAX_CLUSTER_POP)
-    create_cluster(surface, pos, pop, tier, force, command, nil, kind, horde_member)
+    local cl = create_cluster(surface, pos, pop, tier, force, command, nil, kind, horde_member)
+    if cl then made_entities[#made_entities + 1] = cl end
     remainder = remainder - pop
   end
+
+  return made_entities
 end
 
 --- Spawn `n` reanimated-shambler individuals near `pos`, cap-aware: real shambler
@@ -285,13 +293,15 @@ end
 --- the engine's evolution-gated spitter spawns (routed via lib/nest) use "spitter".
 --- `horde_member` (bool) flags every unit/cluster created as part of the current
 --- horde event so the warning can track the live horde's population (lib/horde).
+--- Returns the list of entities created (individuals + cluster(s)) so the caller can
+--- form a unit group from them (the horde event commands GROUPS, not lone units).
 function swarm.spawn(surface, pos, count, tier, force, command, kind, horde_member)
   count = math.floor(count or 0)
-  if count <= 0 then return end
+  if count <= 0 then return {} end
   -- max(1,...) so a positive request never rounds away at a low multiplier
   -- (a building destroyed by zombies always yields at least one zombie).
   count = math.max(1, math.floor(count * size_multiplier()))
-  do_spawn(surface, pos, count, tier, force, command, kind, horde_member)
+  return do_spawn(surface, pos, count, tier, force, command, kind, horde_member)
 end
 
 --- Spare individual-zombie capacity before the cap (R-HORDE-6). Exposed so other
@@ -342,7 +352,7 @@ function swarm.fold(surface, pos, count, tier, force, shambler_count, kind, hord
         if horde_member then rec.horde_member = true; register_horde_unit(unit) end
         unit.health = pop_health(unit, rec.pop, tier)
         update_label(rec)
-        return
+        return unit
       end
     end
   end
@@ -350,13 +360,15 @@ function swarm.fold(surface, pos, count, tier, force, shambler_count, kind, hord
   -- No mergeable cluster: create new one(s), split so none holds an absurd pop.
   -- Distribute the shambler share across the split chunks.
   local remainder = count
+  local last
   while remainder > 0 do
     local pop = math.min(remainder, MAX_CLUSTER_POP)
     local sh = math.min(shambler_count, pop)
     shambler_count = shambler_count - sh
-    create_cluster(surface, pos, pop, tier, force, nil, sh, kind, horde_member)
+    last = create_cluster(surface, pos, pop, tier, force, nil, sh, kind, horde_member) or last
     remainder = remainder - pop
   end
+  return last
 end
 
 --- A corpse spoiled and the spoilage trigger hatched a zombie (R-CORPSE-5). Route

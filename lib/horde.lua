@@ -388,18 +388,42 @@ local function wall_columns(s, tick)
   return out
 end
 
---- Spawn one burst as a broad WALL: split `count` across the front columns, each
---- spawned at its own point and commanded at the factory building NEAREST it — so the
---- horde advances in parallel lanes across the whole frontage instead of funnelling
---- into single file. No-op if no origin (begin_active always sets one now).
+--- Spawn one burst as a broad WALL: split `count` across the front columns. Each
+--- column's units are gathered into a UNIT GROUP and the GROUP is commanded to march
+--- on the factory building nearest it. Commanding the group (not each unit) is what
+--- makes the engine move them as a cohesive mass — like a vanilla attack wave —
+--- instead of each unit pathing the same route independently and queueing single
+--- file. The columns together still form the broad wall. No-op if no origin.
 local function spawn_horde(surface, s, count, tier, tick)
   if count <= 0 or not s.origin then return end
   local cols = wall_columns(s, tick)
   local per = math.max(1, math.floor(count / #cols))
   for _, c in ipairs(cols) do
+    -- Spawn WITHOUT a per-unit command (nil); the group owns movement. horde_member
+    -- = true so the warning can track this horde's live population.
+    local members = swarm.spawn(surface, c.pos, per, tier, util.ENEMY_FORCE, nil, nil, true) or {}
     local cmd = c.target and march_command(c.target) or nil
-    -- horde_member=true so the warning can track this horde's live population.
-    swarm.spawn(surface, c.pos, per, tier, util.ENEMY_FORCE, cmd, nil, true)
+    local ok, group = pcall(function()
+      return surface.create_unit_group { position = c.pos, force = util.ENEMY_FORCE }
+    end)
+    if ok and group then
+      local added = 0
+      for _, e in ipairs(members) do
+        if e and e.valid and pcall(function() group.add_member(e) end) then
+          added = added + 1
+        end
+      end
+      s.debug_grouped = (s.debug_grouped or 0) + added  -- test hook: members grouped
+      if cmd then
+        pcall(function() group.set_command(cmd); group.start_moving() end)
+      end
+    elseif cmd then
+      -- Fallback (group couldn't form): at least command the members directly so the
+      -- wave still advances rather than idling.
+      for _, e in ipairs(members) do
+        if e and e.valid then pcall(function() e.commandable.set_command(cmd) end) end
+      end
+    end
   end
 end
 
@@ -480,6 +504,7 @@ local function begin_active(s, surface, tick, dur, forced)
   s.period_end_tick = tick + dur
   s.forced_until = forced and (tick + dur) or nil
   s.warned = true
+  s.debug_grouped = 0   -- count of members added to unit groups this event (test hook)
 
   -- A fresh horde: forget the previous horde's members so its survivors can't
   -- inflate this horde's warning count.
@@ -687,6 +712,12 @@ function horde.debug_wall_columns(tick)
   local s = state()
   if not s.origin then return {} end
   return wall_columns(s, tick or (game and game.tick) or 0)
+end
+
+--- Test-only: how many horde members have been added to unit groups in the current
+--- event (proves the wave is group-commanded, not lone per-unit commands).
+function horde.debug_grouped()
+  return state().debug_grouped or 0
 end
 
 --- Test-only: run one warning update pass on the home surface (like night.sweep_now),

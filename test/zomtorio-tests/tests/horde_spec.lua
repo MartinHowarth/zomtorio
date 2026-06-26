@@ -255,6 +255,42 @@ T.test("a horde approaches as a wide WALL with spread columns and distinct targe
   end },
 })
 
+------------------------------------------------------ cohesive movement (unit groups)
+
+-- DEFENDS "advance as a cohesive mass, not single-file chains": each column's members
+-- are gathered into a UNIT GROUP and the GROUP is commanded (like a vanilla attack
+-- wave), instead of each unit getting its own attack command and pathing the same
+-- route independently (which queued them single-file). Asserts a spawned member is a
+-- member of a unit group after a burst.
+T.test("a horde commands its members as unit groups (cohesive wave, not single file)", {
+  function(t)
+    reset(t)
+    horde.set_factory_override {
+      center = { x = t.test_origin.x, y = t.test_origin.y },
+      radius = 50,
+      buildings = { { x = t.test_origin.x + 50, y = t.test_origin.y } },
+    }
+    horde.set_overrides { enabled = true }
+    horde.set_evolution_override(0.3)
+    swarm.set_cap_override(10000)   -- members are real individuals, easy to inspect
+    horde.force_event(1)
+  end,
+  { after = 1, fn = function(t)
+    local st = horde.get_state()
+    local o = st.origin
+    t.surface.request_to_generate_chunks(o, 2)
+    t.surface.force_generate_chunk_requests()
+    local pe = st.period_end_tick
+    local tk = pe - (pe % 60) - 60        -- a burst tick inside the spawning window
+    horde.on_tick { tick = tk }
+
+    -- The burst must have gathered its spawned members into unit groups (not commanded
+    -- them one-by-one). debug_grouped counts members successfully added to a group.
+    t.assert.at_least(1, horde.debug_grouped(),
+      "spawned horde members were added to unit groups (cohesive wave, not single file)")
+  end },
+})
+
 ------------------------------------------------------ warning: live population
 
 -- DEFENDS the reported bug: the warning count must NOT drop while the horde merely

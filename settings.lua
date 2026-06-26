@@ -70,7 +70,7 @@ data:extend({
   -- Overall horde-size multiplier applied to generated counts (R-HORDE-7).
   {
     type = "double-setting",
-    name = "zomtorio-horde-size-multiplier",
+    name = "zomtorio-zombie-count-multiplier",
     setting_type = "runtime-global",
     default_value = 1.0,
     minimum_value = 0.1,
@@ -183,14 +183,14 @@ data:extend({
   -- Escalating swarm events (R-GEN-5): on/off + intensity & frequency scaling.
   {
     type = "bool-setting",
-    name = "zomtorio-swarm-events",
+    name = "zomtorio-horde-events",
     setting_type = "runtime-global",
     default_value = true,
     order = "e-a",
   },
   {
     type = "double-setting",
-    name = "zomtorio-swarm-intensity",
+    name = "zomtorio-horde-intensity",
     setting_type = "runtime-global",
     default_value = 1.0,
     minimum_value = 0.1,
@@ -199,7 +199,7 @@ data:extend({
   },
   {
     type = "double-setting",
-    name = "zomtorio-swarm-frequency",
+    name = "zomtorio-horde-frequency",
     setting_type = "runtime-global",
     default_value = 1.0,
     minimum_value = 0.1,

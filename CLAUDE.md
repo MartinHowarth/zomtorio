@@ -15,25 +15,21 @@ full requirement spec `R-*` and working notes.)
 
 ---
 
-## Terminology (important — code names are mid-rename)
+## Terminology
 
-Two words are easy to confuse; this is the intended meaning:
+Two words mean distinct things; the code now matches these names exactly:
 
-| Concept (the real meaning) | What it is | Current code name | Module |
+| Term | What it is | Module | Entity prototypes |
 |---|---|---|---|
-| **swarm** | one entity standing in for **N** zombies (cheap mass) | "horde unit" / cluster | `lib/horde.lua` |
-| **horde** | a telegraphed **attack wave** from a direction | "swarm event" | `lib/swarm.lua` |
+| **swarm** | one entity standing in for **N** zombies (cheap mass) | `lib/swarm.lua` | `zomtorio-swarm-small/medium/big` |
+| **horde** | a telegraphed **attack wave** from a direction | `lib/horde.lua` | (no entity — a spawn schedule) |
 
-The code currently has these two names **swapped** relative to the intended meaning. A
-code-level rename (identifiers/modules/comments) to fix this is planned; engine-facing
-strings (entity prototype names like `zomtorio-horde-small`, setting keys) stay as legacy
-ids for **save compatibility**. Until the rename lands, read the table above.
-
-Below, the **bold intended terms** are used; the module column tells you the file.
+Note `zomtorio-swarm-melee` (tech/damage type) and the `/zomtorio-horde` command are named
+for their meaning too (melee that cuts a *swarm*; the command that triggers a *horde*).
 
 ---
 
-## The swarm unit (mass without CPU cost) — `lib/horde.lua`
+## The swarm unit (mass without CPU cost) — `lib/swarm.lua`
 
 - A **swarm** is a single `unit` entity that represents a population of N zombies (population
   in `storage`, keyed by `unit_number`). Prototypes: `prototypes/entities.lua` (a green-tinted
@@ -41,11 +37,11 @@ Below, the **bold intended terms** are used; the module column tells you the fil
 - **Hit handling:** a normal hit removes **1** from the population; explosive / fire / upgraded
   swarm-melee remove `floor(damage_dealt / single-zombie-health)`. The script owns every death
   (the entity is never engine-killed); it dies at population 0. An alt-mode label shows the count.
-- **Dynamic cap & overflow:** `horde.spawn()` is the single cap-aware spawner every source
+- **Dynamic cap & overflow:** `swarm.spawn()` is the single cap-aware spawner every source
   routes through. It creates real individuals up to a configurable cap, then **folds** overflow
   into swarm units near the spawn point (merging into a nearby swarm within radius 8). When a
   swarm is hit and the cap has room and a player is near, it **bursts** into individuals.
-- Setting: `zomtorio-zombie-cap` (CPU tuning), `zomtorio-horde-size-multiplier` (overall count).
+- Setting: `zomtorio-zombie-cap` (CPU tuning), `zomtorio-zombie-count-multiplier` (overall count).
 
 ## Zombie sources
 
@@ -60,15 +56,15 @@ Below, the **bold intended terms** are used; the module column tells you the fil
   population, scaled by local pollution between `zomtorio-nest-swarm-base`..`-max`) caps how big
   a nest's local swarm grows so an un-triggered nest can't grow forever.
 - **Map / nest tuning** — `prototypes/tuning.lua` (dense, weak, slow, cheap-pollution biters;
-  denser spawners) + `lib/swarm.lua` `apply_map_settings` (aggressive expansion, tight unit
+  denser spawners) + `lib/horde.lua` `apply_map_settings` (aggressive expansion, tight unit
   groups). Settings: `zomtorio-pollution-cost-multiplier`, `zomtorio-nest-spawn-rate`,
   `zomtorio-expansion-rate`.
-- **Hordes (telegraphed attack waves)** — `lib/swarm.lua`. Periodic, **night-bound**, telegraphed
+- **Hordes (telegraphed attack waves)** — `lib/horde.lua`. Periodic, **night-bound**, telegraphed
   ~1 day ahead; frequency and duration scale with evolution (~10% of a night at evo 0 → a full
   night at evo 1). A horde appears from **one random direction ~10 chunks beyond the factory
   edge**, marches on the factory, and is marked on the map (a traveling "Horde" chart tag + a
   `[gps]` chat warning). Plus a smaller ambient **night-escalation** trickle around the player.
-  Settings: `zomtorio-swarm-events` (on/off), `-swarm-intensity`, `-swarm-frequency`,
+  Settings: `zomtorio-horde-events` (on/off), `-horde-intensity`, `-horde-frequency`,
   `-night-assault-multiplier`. Manual trigger: **`/zomtorio-horde [minutes]`**.
 
 ## Infection — `lib/infection.lua`, `lib/contagion.lua`
@@ -106,7 +102,7 @@ Below, the **bold intended terms** are used; the module column tells you the fil
 - At night, zombies near a player move faster (default +100%, still below a vanilla biter).
   Mechanism: faster **night-variant prototypes** swapped in near the player and back by day
   (the only way to change a `unit`'s speed in 2.1). Applies to **both individuals and swarms**
-  (swarm swaps preserve the population record via `horde.swap_cluster`). Setting (startup):
+  (swarm swaps preserve the population record via `swarm.swap_cluster`). Setting (startup):
   `zomtorio-night-speedup`.
 
 ---

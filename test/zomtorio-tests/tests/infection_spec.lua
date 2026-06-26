@@ -111,7 +111,7 @@ T.test("the DoT kills an infected building in the configured time", {
 
 -- R-INF-3 end-to-end: a building killed by the infection DoT spawns zombies. The
 -- DoT is dealt on the enemy force, so the resulting on_entity_died (handled by
--- the MAIN mod) routes through spawning -> horde.spawn and creates zombie
+-- the MAIN mod) routes through spawning -> swarm.spawn and creates zombie
 -- entities in the shared world. We assert on the WORLD (not test-mod storage),
 -- which is what makes this a genuine end-to-end check of the integration.
 T.test("an infection death spawns zombies (R-INF-3)", {

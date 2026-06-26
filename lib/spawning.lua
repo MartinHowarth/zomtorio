@@ -18,7 +18,7 @@
 -- on_entity_died — so we explicitly gate on the death being enemy-caused.
 
 local raw_cost = require("lib.raw_cost")
-local horde    = require("lib.horde")
+local swarm    = require("lib.swarm")
 local planets  = require("lib.planets")
 local util     = require("lib.util")
 
@@ -56,11 +56,11 @@ function spawning.on_entity_died(event)
   local solid = raw_cost.for_entity(entity.name)
   if solid <= 0 then return end  -- non-buildings (trees/rocks) decompose to 0
 
-  -- Count = total-raw solid cost (R-DEATH-2). The overall horde-size multiplier
-  -- (R-HORDE-7) is applied centrally in horde.spawn, which also guarantees a
+  -- Count = total-raw solid cost (R-DEATH-2). The overall swarm-size multiplier
+  -- (R-HORDE-7) is applied centrally in swarm.spawn, which also guarantees a
   -- qualifying building always yields at least one zombie. Always the basic tier
   -- (playtest decision): the threat is numbers, not per-zombie strength.
-  horde.spawn(entity.surface, entity.position, solid, DEATH_TIER, util.ENEMY_FORCE)
+  swarm.spawn(entity.surface, entity.position, solid, DEATH_TIER, util.ENEMY_FORCE)
 end
 
 return spawning

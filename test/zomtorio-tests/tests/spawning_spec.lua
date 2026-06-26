@@ -2,20 +2,20 @@
 -- real modules from the linked main mod via the __zomtorio__ require path.
 --
 -- IMPORTANT — why we call spawning.on_entity_died DIRECTLY (synthesizing the
--- event): each mod has its OWN Lua state and `storage`. The spawning/horde
+-- event): each mod has its OWN Lua state and `storage`. The spawning/swarm
 -- module instances loaded here (in the test mod) share the storage that the
 -- spawner writes to, so the resulting clusters are inspectable from here; the
 -- main mod's registered handler would write the main mod's (separate) storage.
 -- The handler only reads the entity's properties, so we pass a LIVE building as
 -- event.entity rather than actually destroying it.
 --
--- We pin the cap to 0 (horde.set_cap_override) so EVERY spawned zombie folds
--- into a zomtorio-horde-* cluster, then sum populations of the clusters near the
+-- We pin the cap to 0 (swarm.set_cap_override) so EVERY spawned zombie folds
+-- into a zomtorio-swarm-* cluster, then sum populations of the clusters near the
 -- death position to assert the spawned count. on_init() resets storage first.
 
 local T        = require("harness.runner")
 local spawning = require("__zomtorio__.lib.spawning")
-local horde    = require("__zomtorio__.lib.horde")
+local swarm    = require("__zomtorio__.lib.swarm")
 local tiers    = require("__zomtorio__.lib.tiers")
 
 -- Total population standing near `pos` across all cluster tiers (cap pinned to 0
@@ -24,10 +24,10 @@ local function total_pop(surface, pos)
   local sum = 0
   for _, tier in ipairs(tiers.ORDER) do
     local found = surface.find_entities_filtered {
-      name = tiers.HORDE[tier], position = pos, radius = 48,
+      name = tiers.SWARM[tier], position = pos, radius = 48,
     }
     for _, c in ipairs(found) do
-      sum = sum + (horde.pop_of(c) or 0)
+      sum = sum + (swarm.pop_of(c) or 0)
     end
   end
   return sum
@@ -37,17 +37,17 @@ end
 local function find_cluster(surface, pos)
   for _, tier in ipairs(tiers.ORDER) do
     local found = surface.find_entities_filtered {
-      name = tiers.HORDE[tier], position = pos, radius = 48,
+      name = tiers.SWARM[tier], position = pos, radius = 48,
     }
     if found[1] then return found[1] end
   end
   return nil
 end
 
--- Reset horde storage and pin the cap to 0 so all spawns fold into clusters.
+-- Reset swarm storage and pin the cap to 0 so all spawns fold into clusters.
 local function reset()
-  horde.reset_state()
-  horde.set_cap_override(0)
+  swarm.reset_state()
+  swarm.set_cap_override(0)
 end
 
 -- --------------------------------------------------------- enemy kill -> N
@@ -156,12 +156,12 @@ T.test("a building death always spawns the basic tier (no oil escalation)", func
 
   -- The basic tier must appear; no medium/big from a building death.
   local small = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = pos, radius = 48,
+    name = tiers.SWARM.small, position = pos, radius = 48,
   }
   t.assert.at_least(1, #small, "building death spawns the basic 'small' tier")
 
   local higher = t.surface.find_entities_filtered {
-    name = { tiers.HORDE.medium, tiers.HORDE.big }, position = pos, radius = 48,
+    name = { tiers.SWARM.medium, tiers.SWARM.big }, position = pos, radius = 48,
   }
   t.assert.equal(0, #higher, "building death must NOT spawn medium/big tiers")
 end)

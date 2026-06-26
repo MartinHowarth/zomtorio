@@ -2,7 +2,7 @@
 -- settings (R-GEN-3).
 --
 -- Prototype tuning is verified by reading prototypes at runtime; map settings by
--- reading game.map_settings after swarm.on_init(). Vanilla baselines are hardcoded
+-- reading game.map_settings after horde.on_init(). Vanilla baselines are hardcoded
 -- from the unmodded base data (small-biter: speed 0.2, max_health 15, collision
 -- box +/-0.2; biter-spawner: max_count_of_owned_units 7; enemy_expansion cooldowns
 -- 14400/216000) so a regression in the tuning shows up as a failed comparison.
@@ -16,7 +16,7 @@
 local T = require("harness.runner")
 
 local config = require("__zomtorio__.lib.config")
-local swarm  = require("__zomtorio__.lib.swarm")
+local horde  = require("__zomtorio__.lib.horde")
 local tiers  = require("__zomtorio__.lib.tiers")
 
 -- Vanilla (unmodded) baselines.
@@ -63,8 +63,8 @@ end)
 
 ------------------------------------------------------------- cluster speed tuned
 T.test("a horde cluster moves at the tuned day-zombie pace, not vanilla pace", function(t)
-  local cluster = prototypes.entity[tiers.HORDE.small]
-  t.assert.not_nil(cluster, "zomtorio-horde-small prototype should exist")
+  local cluster = prototypes.entity[tiers.SWARM.small]
+  t.assert.not_nil(cluster, "zomtorio-swarm-small prototype should exist")
   local day = prototypes.entity["small-biter"]
   -- Cluster speed was divided by 4 just like the day biter, so they match.
   t.assert.at_least(day.speed - 0.0001, cluster.speed, "cluster speed >= tuned day biter")
@@ -114,9 +114,9 @@ T.test("R-GEN-2 / worms: affected prototypes exist (value gap noted, not runtime
 end)
 
 --------------------------------------------------------- map settings applied
-T.test("R-GEN-3: swarm.on_init applies denser map settings", {
+T.test("R-GEN-3: horde.on_init applies denser map settings", {
   function(t)
-    swarm.on_init()
+    horde.on_init()
   end,
   { after = 1, fn = function(t)
     local exp = game.map_settings.enemy_expansion
@@ -140,7 +140,7 @@ T.test("R-GEN-3: swarm.on_init applies denser map settings", {
 -- already halves the 2-minute base min cooldown to 60s.)
 T.test("R-GEN-7: expansion-rate change re-applies map settings", {
   function(t)
-    swarm.on_runtime_setting_changed({ setting = "zomtorio-expansion-rate" })
+    horde.on_runtime_setting_changed({ setting = "zomtorio-expansion-rate" })
   end,
   { after = 1, fn = function(t)
     local exp = game.map_settings.enemy_expansion

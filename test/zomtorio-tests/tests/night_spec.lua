@@ -1,7 +1,7 @@
 -- S9 — night aggression (R-NIGHT-1/2, R-SCOPE-1).
 --
 -- The headless benchmark has no players, so a placed `character` entity is the
--- proximity anchor (as in the horde burst tests). Day/night is forced by
+-- proximity anchor (as in the swarm burst tests). Day/night is forced by
 -- freezing daytime and setting surface.daytime (verified writable: noon -> 0.0,
 -- midnight -> 0.5 with darkness ~0.85).
 --
@@ -13,7 +13,7 @@ local T = require("harness.runner")
 
 local night  = require("__zomtorio__.lib.night")
 local config = require("__zomtorio__.lib.config")
-local horde  = require("__zomtorio__.lib.horde")
+local swarm  = require("__zomtorio__.lib.swarm")
 local tiers  = require("__zomtorio__.lib.tiers")
 
 local function set_midnight(surface)
@@ -97,7 +97,7 @@ T.test("night swaps a nearby enemy unit to its faster night variant", {
 -- Swarms (clusters) speed up at night like loose biters: the sweep swaps a cluster
 -- to its night-variant cluster, carrying the population record across. Built and
 -- swept ATOMICALLY in one step (like the test above) so the live mod's own sweep
--- can't race our (separate-module) state. Uses horde.fold for a deterministic pop.
+-- can't race our (separate-module) state. Uses swarm.fold for a deterministic pop.
 T.test("night swaps a swarm cluster to its night variant, preserving population", {
   function(t)
     set_midnight(t.surface)
@@ -108,21 +108,21 @@ T.test("night swaps a swarm cluster to its night variant, preserving population"
     t.world.clear(t.surface, t.test_origin, 16)
     local char = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
     char.destructible = false
-    horde.reset_state()
-    horde.fold(t.surface, { x = t.test_origin.x + 6, y = t.test_origin.y },
+    swarm.reset_state()
+    swarm.fold(t.surface, { x = t.test_origin.x + 6, y = t.test_origin.y },
       25, "small", "enemy")              -- a pop-25 day cluster, no cap/multiplier
 
     night.sweep_now()
 
     local found = t.surface.find_entities_filtered {
-      name = tiers.HORDE_ALL, position = t.test_origin, radius = 16,
+      name = tiers.SWARM_ALL, position = t.test_origin, radius = 16,
     }
     local cluster = found[1]
     t.assert.not_nil(cluster, "a cluster should still exist after the swap")
     t.assert.is_true(night.is_night_variant(cluster.name),
       "the swarm is swapped to its night-variant cluster [name=" ..
       (cluster and cluster.name or "nil") .. "]")
-    t.assert.equal(25, horde.pop_of(cluster),
+    t.assert.equal(25, swarm.pop_of(cluster),
       "the swarm's population is preserved across the swap")
   end },
 })

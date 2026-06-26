@@ -9,12 +9,12 @@
 --  * entity.damage(...) fires real engine events handled by the MAIN mod (separate
 --    storage), so we DON'T test cluster multi-kill through the engine. Instead we
 --    test the AoE on real individual biters in the world (entity.damage affects
---    them directly), and the base-1-kill rule purely through horde, and the
+--    them directly), and the base-1-kill rule purely through swarm, and the
 --    double-tap corpse suppression by calling corpses.on_entity_died directly.
 
 local T       = require("harness.runner")
 local melee   = require("__zomtorio__.lib.melee")
-local horde   = require("__zomtorio__.lib.horde")
+local swarm   = require("__zomtorio__.lib.swarm")
 local corpses = require("__zomtorio__.lib.corpses")
 local tiers   = require("__zomtorio__.lib.tiers")
 
@@ -25,7 +25,7 @@ local TIER_2 = "zomtorio-swarm-melee-2"
 
 -- Clean slate for the modules we touch.
 local function reset()
-  horde.reset_state()
+  swarm.reset_state()
   melee.reset_state()
   melee.set_double_tap_override(nil)
 end
@@ -60,30 +60,30 @@ end
 
 -- ------------------------------------------------ base punch kills 1 (R-MELEE-1)
 -- With NO tech, a base "zombie-melee" hit on a cluster removes exactly one
--- population — proving the base type is single-kill, not a horde multi-kill type.
+-- population — proving the base type is single-kill, not a swarm multi-kill type.
 T.test("a base melee punch kills exactly one zombie on a cluster", function(t)
   reset()
-  horde.set_cap_override(0)  -- force a cluster, no burst
+  swarm.set_cap_override(0)  -- force a cluster, no burst
   local o = t.test_origin
   t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 10, "small", "enemy")
+  swarm.spawn(t.surface, o, 10, "small", "enemy")
   local found = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 32,
+    name = tiers.SWARM.small, position = o, radius = 32,
   }
   local cluster = found[1]
   t.assert.not_nil(cluster, "cluster should exist")
-  t.assert.equal(10, horde.pop_of(cluster), "starts at pop 10")
+  t.assert.equal(10, swarm.pop_of(cluster), "starts at pop 10")
 
-  local single = horde.single_health("small")
+  local single = swarm.single_health("small")
   cluster.damage(single * 5, "player", "physical")  -- realistic health side-effect
-  horde.on_entity_damaged {
+  swarm.on_entity_damaged {
     entity = cluster,
     damage_type = { name = BASE_MELEE },
     original_damage_amount = single * 5,
     final_damage_amount = single * 5,
   }
 
-  t.assert.equal(9, horde.pop_of(cluster), "base punch kills exactly 1 (R-MELEE-1)")
+  t.assert.equal(9, swarm.pop_of(cluster), "base punch kills exactly 1 (R-MELEE-1)")
 end)
 
 -- ------------------------------ Tier-1 AoE multi-kills a swarm, enemy-only (R-MELEE-2/4)

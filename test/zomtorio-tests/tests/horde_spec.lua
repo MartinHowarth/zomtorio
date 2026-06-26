@@ -1,231 +1,251 @@
--- S2 tests: the horde population model + unified cap-aware spawner
--- (R-HORDE-2..6). Loads the real module from the linked main mod via the
--- __zomtorio__ require path, so the spawner, cap accounting and hit logic under
--- test are the production code.
+-- S10b — escalating swarm events (R-GEN-5) + night escalation (R-GEN-4).
 --
--- IMPORTANT — why we call horde.on_entity_damaged DIRECTLY instead of via the
--- engine event: each mod has its OWN Lua state and `storage`. The horde module
--- instance loaded here (in the test mod) has the storage that our horde.spawn
--- writes to; the main mod's registered on_entity_damaged handler reads the main
--- mod's (separate) storage and so can't see our test clusters. Calling the
--- handler on this instance with a synthesized event is the only way to exercise
--- the real hit logic against the cluster we just spawned. We still apply the
--- engine damage first (entity.damage) so health-side effects are realistic.
+-- The state machine lives in horde.on_tick, gated on horde_events_enabled,
+-- night-bound, evolution-scaled. The headless benchmark has no players, so a
+-- placed `character` is the spawn anchor (as in the night/horde tests). Settings
+-- and per-surface evolution can't be written by the test mod, so the module
+-- exposes override hooks (set_overrides / set_evolution_override) the tests use.
 --
--- on_init() resets storage (incl. the cap's individual_count) before each test
--- so cap accounting is deterministic. Runtime-global settings can only be
--- written by their OWNING mod, so this (separate) test mod cannot set the cap
--- setting; instead we pin the cap through horde.set_cap_override, the single
--- internal hook the runtime exposes for exactly this purpose.
+-- on_tick self-throttles to a multiple of its TICK_PERIOD; tests therefore pass a
+-- synthetic, multiple-of-period `tick` and schedule next_event_tick relative to
+-- that same value so the comparisons inside the machine are internally consistent.
 
-local T     = require("harness.runner")
+local T = require("harness.runner")
+
 local horde = require("__zomtorio__.lib.horde")
+local swarm = require("__zomtorio__.lib.swarm")
 local tiers = require("__zomtorio__.lib.tiers")
 
-local DEFAULT_CAP = 1000
+-- A tick that satisfies on_tick's internal throttle (multiple of its period).
+local TICK = 6000
 
-local function set_cap(n)
-  horde.set_cap_override(n)
+local function set_midnight(surface)
+  surface.freeze_daytime = true
+  surface.daytime = 0.5
 end
 
--- Reset both the cap and our storage so each test starts from a known state.
-local function reset(cap)
-  set_cap(cap or DEFAULT_CAP)
-  horde.reset_state()
+local function set_noon(surface)
+  surface.freeze_daytime = true
+  surface.daytime = 0.0
 end
 
---- Find the (single) tracked horde unit near a position, by prototype name.
-local function find_cluster(surface, pos, tier)
-  local name = (tiers.HORDE)[tier or "small"]
-  local found = surface.find_entities_filtered { name = name, position = pos, radius = 32 }
-  return found[1]
+--- Reset to a known baseline before each case: clean event state, no overrides,
+--- and a clean horde slate so active_count deltas are unambiguous.
+local function reset(t)
+  horde.reset_state()       -- map settings + event state + clears overrides
+  swarm.reset_state()
+  swarm.set_cap_override(nil)
 end
 
---- Hit a horde unit: apply the real engine damage, then drive the handler on the
---- module instance whose storage holds the cluster (see header note).
-local function hit(entity, amount, damage_type, final)
-  entity.damage(amount, "player", damage_type)
-  -- The handler reads damage_type.name and the dealt (final) damage, falling
-  -- back to original. `final` defaults to `amount` (a no-resistance hit).
-  horde.on_entity_damaged {
-    entity = entity,
-    damage_type = { name = damage_type },
-    original_damage_amount = amount,
-    final_damage_amount = final or amount,
-  }
+local function tick_event(tick)
+  horde.on_tick { tick = tick }
 end
 
--- ----------------------------------------------------------------- pop math
--- Force a cluster by spawning into a zero-room cap: every zombie folds into a
--- horde unit. Assert the unit exists with the expected pop and that it sits at full
--- (huge) health — clusters stay at max_health so no single damage instance can wipe
--- the whole swarm; population is tracked in storage, not the health bar.
-T.test("spawn into a full cap creates a cluster with the right pop and health", function(t)
-  reset(50)
-  -- Fill the cap so there is no individual room: spawn exactly the cap first.
-  horde.spawn(t.surface, t.test_origin, 50, "small", "enemy")
-  t.assert.equal(50, horde.active_count(), "cap should be full of individuals")
+------------------------------------------------------ PURE: spawning-period scaling
 
-  -- Now spawn 30 more of a clean tier elsewhere: all must fold into a cluster.
-  local o = { x = t.test_origin.x + 40, y = t.test_origin.y }
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 30, "small", "enemy")
+T.test("R-GEN-5: spawning period scales ~10% night at evo 0 to a full night at evo 1", function(t)
+  local n  = horde.NIGHT_TICKS
+  local p0 = horde.spawning_period_ticks(0.0, 1.0)
+  local p1 = horde.spawning_period_ticks(1.0, 1.0)
 
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "a horde-unit cluster should exist")
-  t.assert.equal(30, horde.pop_of(cluster), "cluster pop should be the overflow")
-  t.assert.equal(cluster.max_health, cluster.health,
-    "cluster stays at full (huge) health — immune to a one-shot; pop lives in storage")
+  -- ~10% of a night at evolution 0 (allow a tick of floor() slack each side).
+  -- A.at_least(min, actual) asserts actual >= min.
+  t.assert.at_least(math.floor(n * 0.10) - 1, p0, "evo0 period >= ~10% of a night")
+  t.assert.at_least(p0, math.floor(n * 0.10) + 1, "evo0 period <= ~10% of a night")
+
+  -- A full night at evolution 1.0 (clamped to at most one night).
+  t.assert.equal(n, p1, "evo1 period is a full night")
+
+  -- And it grows with evolution.
+  t.assert.is_true(p1 > p0, string.format("period grows with evo (p0=%d p1=%d)", p0, p1))
 end)
 
--- ------------------------------------------------------------ normal-hit kill
--- A normal (physical) hit kills exactly one zombie's worth: pop drops by 1.
--- No character is placed, so it never bursts -> it just loses population.
-T.test("a normal hit removes one population", function(t)
-  reset(0)  -- cap full so the spawn folds into a cluster
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 10, "small", "enemy")
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "cluster should exist")
-  t.assert.equal(10, horde.pop_of(cluster), "starts at pop 10")
-  t.assert.equal("10", horde.pop_label_text(cluster), "pop label shows the count")
+------------------------------------------------------ PURE: frequency scaling
 
-  hit(cluster, 5, "physical")
-  t.assert.equal(9, horde.pop_of(cluster), "physical hit kills exactly 1")
-  t.assert.equal("9", horde.pop_label_text(cluster), "pop label tracks the count")
+T.test("R-GEN-5: event interval shrinks with evolution and with frequency", function(t)
+  local lo_evo = horde.event_interval_ticks(0.0, 1.0)
+  local hi_evo = horde.event_interval_ticks(1.0, 1.0)
+  t.assert.is_true(hi_evo < lo_evo,
+    string.format("higher evolution => shorter interval (e0=%d e1=%d)", lo_evo, hi_evo))
+
+  local f1 = horde.event_interval_ticks(0.3, 1.0)
+  local f2 = horde.event_interval_ticks(0.3, 2.0)
+  t.assert.is_true(f2 < f1,
+    string.format("higher frequency => shorter interval (f1=%d f2=%d)", f1, f2))
 end)
 
--- A strong single non-explosive/fire hit far above the swarm's notional health
--- (pop x single ~= 30) but within the cluster's one-shot headroom still removes only
--- ONE — the fix for a strong shot wiping a whole small cluster. Only the script
--- removes population.
-T.test("a strong single physical hit removes only one (no one-shot wipe)", function(t)
-  reset(0)
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 8, "small", "enemy")
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "cluster should exist")
+------------------------------------------------------ telegraph fires first
 
-  hit(cluster, 500, "physical")  -- >> pop x single, but within the headroom
-  t.assert.is_true(cluster.valid, "cluster survives a strong single physical hit")
-  t.assert.equal(7, horde.pop_of(cluster), "still only one removed")
+T.test("R-GEN-5: a swarm is telegraphed before it begins", {
+  function(t)
+    reset(t)
+    set_noon(t.surface)                 -- daytime: cannot begin, only warn
+    horde.set_overrides { enabled = true }
+    horde.set_evolution_override(0.2)
+    -- Schedule the event just inside the telegraph lead from our synthetic tick.
+    horde.set_next_event_tick(TICK + 1000)
+    tick_event(TICK)
+  end,
+  { after = 1, fn = function(t)
+    local s = horde.get_state()
+    t.assert.is_true(s.warned, "the event within the telegraph lead should be warned")
+    t.assert.is_false(s.active, "warning alone must not start the event by day")
+  end },
+})
+
+------------------------------------------------------ event is night-bound
+
+T.test("R-GEN-5: the event only begins at night, not by day", {
+  function(t)
+    reset(t)
+    set_noon(t.surface)
+    horde.set_overrides { enabled = true }
+    horde.set_evolution_override(0.5)
+    horde.set_next_event_tick(TICK)     -- due now
+    tick_event(TICK)
+  end,
+  { after = 1, fn = function(t)
+    t.assert.is_false(horde.get_state().active, "due but daytime => not active")
+    -- Now force night and tick again: it should begin.
+    set_midnight(t.surface)
+  end },
+  { after = 5, fn = function(t)
+    horde.set_next_event_tick(TICK)     -- still due (reset cleared nothing)
+    tick_event(TICK)
+  end },
+  { after = 1, fn = function(t)
+    t.assert.is_true(horde.get_state().active, "due AND night => active")
+  end },
+})
+
+------------------------------------------------------ forced (debug) horde trigger
+
+-- horde.force_event (the /zomtorio-horde command) starts a horde RIGHT NOW even in
+-- daylight and even with the on/off setting disabled — and a daytime tick within
+-- the forced window must not end it (a forced event bypasses the dawn end).
+T.test("force_event starts a horde now and survives daylight (debug trigger)", function(t)
+  reset(t)
+  set_noon(t.surface)                       -- daytime: a scheduled event couldn't start
+  horde.set_overrides { enabled = false }   -- and events are even disabled
+  horde.set_evolution_override(0.5)
+
+  horde.force_event(1)                       -- force a 1-minute horde
+  local s = horde.get_state()
+  t.assert.is_true(s.active, "forced horde is active immediately")
+  t.assert.not_nil(s.forced_until, "forced window is set")
+
+  -- A throttle-aligned daytime tick just inside the window must NOT end it.
+  local fu = s.forced_until
+  local tk = fu - (fu % 60) - 60
+  horde.on_tick { tick = tk }
+  t.assert.is_true(horde.get_state().active, "forced horde persists through daylight")
 end)
 
--- ----------------------------------------------------------- explosion kills
--- An explosion kills floor(damage / single-zombie-health) (R-HORDE-5).
-T.test("an explosive hit multi-kills proportional to damage", function(t)
-  reset(0)
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 60, "small", "enemy")
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "cluster should exist")
+------------------------------------------------------ horde comes from one direction
 
-  local single = horde.single_health("small")
-  local dmg = single * 7 + 1            -- floor(dmg/single) == 7
-  local expected_kills = math.floor(dmg / single)
-  hit(cluster, dmg, "explosion")
-  t.assert.equal(60 - expected_kills, horde.pop_of(cluster),
-    "explosion kills floor(damage/single)")
-end)
+-- A horde appears from ONE direction, ~10 chunks beyond the factory edge (the
+-- furthest player building), rather than ringing the player (R-GEN-5 follow-up).
+T.test("a forced horde spawns from one direction, ~10 chunks beyond the factory", {
+  function(t)
+    horde.reset_state()
+    horde.set_overrides { enabled = true }
+    t.world.clear(t.surface, t.test_origin, 48)
+    t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+    -- a building 20 tiles out stands in for the factory edge
+    t.world.place(t.surface, "stone-wall",
+      { x = t.test_origin.x + 20, y = t.test_origin.y }, { force = "player" })
+    horde.force_event(1)
+  end,
+  { after = 1, fn = function(t)
+    local st = horde.get_state()
+    t.assert.not_nil(st.origin, "a single horde origin was chosen")
+    local dx = st.origin.x - t.test_origin.x
+    local dy = st.origin.y - t.test_origin.y
+    local d = math.sqrt(dx * dx + dy * dy)
+    -- furthest building (~20) + 10 chunks (320) = ~340; lower-bounded for slack
+    -- (stray player entities from other cases only push it further out).
+    t.assert.at_least(320, d, "origin is at least ~10 chunks beyond the player")
+  end },
+})
 
--- Multi-kill must count damage DEALT (post-resistance), not the pre-resistance
--- amount: original would kill 20, but only 5 worth is actually dealt.
-T.test("explosion multi-kill counts damage dealt, not pre-resistance", function(t)
-  reset(0)
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 60, "small", "enemy")
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "cluster should exist")
+------------------------------------------------------ active event spawns via horde
 
-  local single = horde.single_health("small")
-  hit(cluster, single * 20, "explosion", single * 5)
-  t.assert.equal(60 - 5, horde.pop_of(cluster), "kills computed from damage dealt")
-end)
+T.test("R-GEN-5/6: an active swarm spawns zombies near a player via the unified spawner", {
+  function(t)
+    reset(t)
+    t.world.clear(t.surface, t.test_origin, 64)
+    set_midnight(t.surface)
+    horde.set_overrides { enabled = true, intensity = 1.0 }
+    horde.set_evolution_override(0.3)
+    swarm.set_cap_override(10000)       -- pin so spawns become individuals (countable)
+    t.char = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+    -- Drive the event active, then tick on a burst boundary.
+    horde.set_next_event_tick(TICK)
+    tick_event(TICK)
+    t.before = swarm.active_count()
+  end,
+  { after = 1, fn = function(t)
+    t.assert.is_true(horde.get_state().active, "event should be active")
+    -- A burst lands on the burst-period boundary; TICK is a multiple of it.
+    tick_event(TICK)
+  end },
+  { after = 1, fn = function(t)
+    t.assert.is_true(swarm.active_count() > t.before,
+      string.format("active swarm should spawn zombies (before=%d after=%d)",
+        t.before, swarm.active_count()))
+  end },
+})
 
--- A tracked individual dying must free its cap slot (else the effective cap
--- shrinks over a long game). Exercises horde.on_entity_died's decrement.
-T.test("an individual zombie death frees its cap slot", function(t)
-  reset(DEFAULT_CAP)
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 3, "small", "enemy")  -- cap has room -> 3 real biters
-  t.assert.equal(3, horde.active_count(), "3 tracked individuals")
+------------------------------------------------------ disabled => no event
 
-  -- Pick a biter WE tracked: stray biters from other tests can wander into this
-  -- radius, and killing an untracked one wouldn't (correctly) change the count.
-  local biters = t.surface.find_entities_filtered {
-    name = tiers.INDIVIDUAL.small, position = o, radius = 32,
-  }
-  local victim
-  for _, b in ipairs(biters) do
-    if horde.is_tracked(b.unit_number) then victim = b; break end
-  end
-  t.assert.not_nil(victim, "a tracked individual exists in the world")
-  horde.on_entity_died { entity = victim }
-  t.assert.equal(2, horde.active_count(), "death frees a cap slot")
-end)
+T.test("R-GEN-5: disabling swarm events suppresses them entirely", {
+  function(t)
+    reset(t)
+    t.world.clear(t.surface, t.test_origin, 64)
+    set_midnight(t.surface)
+    horde.set_overrides { enabled = false }
+    horde.set_evolution_override(0.5)
+    swarm.set_cap_override(10000)
+    t.char = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+    horde.set_next_event_tick(TICK)
+    t.before = swarm.active_count()
+    tick_event(TICK)
+  end,
+  { after = 1, fn = function(t)
+    t.assert.is_false(horde.get_state().active,
+      "with events disabled the event must never become active")
+  end },
+})
 
--- ---------------------------------------------------------------- cap -> cluster
--- count >> cap: individuals fill exactly the cap (room), the rest fold into a
--- cluster. (R-HORDE-6: overflow is never discarded.)
-T.test("spawning past the cap fills the cap then folds the rest into a cluster", function(t)
-  reset(20)
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 120, "small", "enemy")
-  t.assert.equal(20, horde.active_count(), "individuals == cap room")
+------------------------------------------------------ R-GEN-4 night escalation
 
-  -- Total population standing in the world is preserved: cap individuals + the
-  -- cluster pop should equal the requested count.
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "overflow cluster should exist")
-  t.assert.equal(100, horde.pop_of(cluster), "cluster holds count - cap")
-end)
+T.test("R-GEN-4: night escalation spawns at night (and not by day) without an event", {
+  function(t)
+    reset(t)
+    t.world.clear(t.surface, t.test_origin, 64)
+    horde.set_overrides { enabled = false, night_assault = 2.0 }  -- no swarm event
+    horde.set_evolution_override(0.4)
+    swarm.set_cap_override(10000)
+    t.char = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
 
--- --------------------------------------------------------------------- burst
--- With cap room AND a character within burst radius, a hit bursts the cluster
--- into individuals: the cluster entity is gone and active_count rises.
-T.test("a hit bursts a cluster into individuals when a player is near", function(t)
-  reset(DEFAULT_CAP)
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-
-  -- Force a cluster (not individuals) by spawning while the cap is momentarily
-  -- full, then restore room so the hit can burst.
-  set_cap(0)
-  horde.spawn(t.surface, o, 12, "small", "enemy")
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "cluster should exist before burst")
-  set_cap(DEFAULT_CAP)
-
-  -- A character nearby acts as the player proximity anchor.
-  t.world.place(t.surface, "character", { x = o.x + 2, y = o.y }, { force = "player" })
-
-  local before = horde.active_count()
-  hit(cluster, 5, "physical")  -- kills 1, bursts the other 11
-
-  t.assert.is_false(cluster.valid, "the cluster entity should be gone after bursting")
-  t.assert.at_least(before + 11, horde.active_count(),
-    "the 11 survivors should now be tracked individuals")
-end)
-
--- ------------------------------------------------------------ death at pop 0
--- Reducing a small cluster's pop to 0 via hits destroys it and clears its record.
-T.test("a cluster dies and is cleared when its population reaches 0", function(t)
-  reset(0)  -- no cap room, no character -> hits only decrement
-  local o = t.test_origin
-  t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 3, "small", "enemy")
-  local cluster = find_cluster(t.surface, o, "small")
-  t.assert.not_nil(cluster, "cluster should exist")
-
-  for _ = 1, 3 do
-    if cluster.valid then hit(cluster, 5, "physical") end
-  end
-  t.assert.is_false(cluster.valid, "cluster destroyed at pop 0")
-  t.assert.equal(nil, horde.pop_of(cluster), "its storage record is cleared")
-end)
+    -- Day first: the trickle must not fire.
+    set_noon(t.surface)
+    t.day_before = swarm.active_count()
+    -- NIGHT_BURST_PERIOD is 300; TICK is a multiple, so we're on a trickle boundary.
+    tick_event(TICK)
+    t.day_after = swarm.active_count()
+  end,
+  { after = 1, fn = function(t)
+    t.assert.equal(t.day_before, t.day_after, "no night escalation by day")
+    set_midnight(t.surface)
+  end },
+  { after = 5, fn = function(t)
+    t.night_before = swarm.active_count()
+    tick_event(TICK)
+  end },
+  { after = 1, fn = function(t)
+    t.assert.is_true(swarm.active_count() > t.night_before,
+      string.format("night escalation should spawn at night (before=%d after=%d)",
+        t.night_before, swarm.active_count()))
+  end },
+})

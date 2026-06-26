@@ -1,7 +1,7 @@
 -- Cap-aware interception of ENGINE nest output (R-GEN-1/6, R-HORDE-6).
 --
 -- Biter nests/spawners spawn units directly via the engine; those spawns never
--- pass through lib/horde's cap-aware spawner, so before this module a saturated
+-- pass through lib/swarm's cap-aware spawner, so before this module a saturated
 -- world just kept emitting unlimited LOOSE individuals near nests and no local
 -- swarm ever formed. The engine raises `on_entity_spawned` whenever a spawner
 -- emits a unit, handing us BOTH the spawner and the new unit -- so we can route
@@ -27,7 +27,7 @@
 -- swarms while wilderness nests stay small.
 
 local config  = require("lib.config")
-local horde   = require("lib.horde")
+local swarm   = require("lib.swarm")
 local planets = require("lib.planets")
 local tiers   = require("lib.tiers")
 local util    = require("lib.util")
@@ -35,7 +35,7 @@ local util    = require("lib.util")
 local nest = {}
 
 -- Radius (tiles) around a spawner within which we measure the local swarm and
--- fold new output. Slightly larger than horde.fold's own merge radius (8) so a
+-- fold new output. Slightly larger than swarm.fold's own merge radius (8) so a
 -- nest's spawns reliably accumulate into one growing cluster.
 local NEST_RADIUS = 16
 
@@ -84,11 +84,11 @@ end
 --- night when nearby swarms have been swapped to their night variant.
 local function local_swarm_pop(surface, pos)
   local found = surface.find_entities_filtered {
-    name = tiers.HORDE_ALL, position = pos, radius = NEST_RADIUS,
+    name = tiers.SWARM_ALL, position = pos, radius = NEST_RADIUS,
   }
   local total = 0
   for _, u in ipairs(found) do
-    total = total + (horde.pop_of(u) or 0)
+    total = total + (swarm.pop_of(u) or 0)
   end
   return total
 end
@@ -104,8 +104,8 @@ function nest.on_entity_spawned(event)
   if not util.is_enemy_force(entity.force) then return end
 
   -- Cap has room: leave it a real individual; it now counts against the cap.
-  if horde.cap_room() > 0 then
-    horde.track(entity)
+  if swarm.cap_room() > 0 then
+    swarm.track(entity)
     return
   end
 
@@ -126,7 +126,7 @@ function nest.on_entity_spawned(event)
   local tier = tier_of(entity.name)
   pcall(function() entity.release_from_spawner() end)
   entity.destroy()
-  horde.fold(surface, pos, 1, tier, util.ENEMY_FORCE)
+  swarm.fold(surface, pos, 1, tier, util.ENEMY_FORCE)
 end
 
 --------------------------------------------------------------------- test API

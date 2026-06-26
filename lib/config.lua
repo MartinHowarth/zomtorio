@@ -19,7 +19,7 @@ local function startup_value(name)
 end
 
 ------------------------------------------------------------------- horde / cap
-function config.horde_size_multiplier() return global_value("zomtorio-horde-size-multiplier") end
+function config.zombie_count_multiplier() return global_value("zomtorio-zombie-count-multiplier") end
 function config.zombie_cap()            return global_value("zomtorio-zombie-cap") end
 
 --- Per-nest swarm budget endpoints (lib/nest.lua): the cluster population a single
@@ -58,8 +58,8 @@ function config.bot_collect_corpses() return global_value("zomtorio-bot-collect-
 ------------------------------------------------------------------- generation
 function config.expansion_rate()           return global_value("zomtorio-expansion-rate") end
 function config.night_assault_multiplier() return global_value("zomtorio-night-assault-multiplier") end
-function config.swarm_events_enabled()     return global_value("zomtorio-swarm-events") end
-function config.swarm_intensity()          return global_value("zomtorio-swarm-intensity") end
-function config.swarm_frequency()          return global_value("zomtorio-swarm-frequency") end
+function config.horde_events_enabled()     return global_value("zomtorio-horde-events") end
+function config.horde_intensity()          return global_value("zomtorio-horde-intensity") end
+function config.horde_frequency()          return global_value("zomtorio-horde-frequency") end
 
 return config

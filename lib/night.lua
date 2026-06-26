@@ -26,7 +26,7 @@
 
 local planets = require("lib.planets")
 local util    = require("lib.util")
-local horde   = require("lib.horde")
+local swarm   = require("lib.swarm")
 local tiers   = require("lib.tiers")
 
 local night = {}
@@ -76,9 +76,9 @@ local function swap_to(surface, unit, new_name)
   local cmd
   local ok, cmdable = pcall(function() return unit.commandable end)
   if ok and cmdable and cmdable.valid then cmd = cmdable.command end
-  -- raise_destroy so the registries that track enemy units (horde cap accounting,
+  -- raise_destroy so the registries that track enemy units (swarm cap accounting,
   -- the contagion mover registry) drop the old unit cleanly: a swapped unit that
-  -- was a horde-tracked individual frees its cap slot rather than leaking it. The
+  -- was a swarm-tracked individual frees its cap slot rather than leaking it. The
   -- replacement is a plain new enemy unit (not re-registered as a tracked
   -- individual) — acceptable for v1; S10 reconciles spawn/cap ownership.
   unit.destroy { raise_destroy = true }
@@ -131,17 +131,17 @@ function night.on_tick(event)
         if u.valid then
           local target = night_now and night_variant_of(u.name) or day_form_of(u.name)
           if target then
-            if tiers.HORDE_TO_TIER[u.name] then
-              -- A cluster (swarm): swap via horde so its population record (pop,
+            if tiers.SWARM_TO_TIER[u.name] then
+              -- A cluster (swarm): swap via swarm so its population record (pop,
               -- health, label) is carried across rather than orphaned.
-              horde.swap_cluster(u, target)
+              swarm.swap_cluster(u, target)
             else
               -- An individual: preserve cap accounting across the destroy+recreate
               -- swap — if it was a tracked individual, re-track the replacement so
-              -- the cap count doesn't drift down (see horde.track).
-              local was_tracked = horde.is_tracked(u.unit_number)
+              -- the cap count doesn't drift down (see swarm.track).
+              local was_tracked = swarm.is_tracked(u.unit_number)
               local new = swap_to(surface, u, target)
-              if was_tracked and new and new.valid then horde.track(new) end
+              if was_tracked and new and new.valid then swarm.track(new) end
             end
           end
         end

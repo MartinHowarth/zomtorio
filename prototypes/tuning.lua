@@ -102,7 +102,7 @@ end
 -- Both day AND night cluster forms (HORDE_ALL): the night variant was cloned from
 -- the base cluster at the data stage with full speed, so it must get the same /4
 -- here or the night/day ratio (1 + speedup) would balloon.
-for _, cluster_name in pairs(tiers.HORDE_ALL) do
+for _, cluster_name in pairs(tiers.SWARM_ALL) do
   local cluster = data.raw.unit[cluster_name]
   if cluster then
     if cluster.movement_speed then

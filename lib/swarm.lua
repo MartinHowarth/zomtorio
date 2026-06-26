@@ -1,586 +1,513 @@
--- S10 — enemy generation: map/force tuning (R-GEN-3). Applies the denser, more
--- aggressive map settings (expansion + dense, frequent, tightly-packed unit
--- groups) on top of the prototype tuning done in data-final-fixes.
+-- S2 — the swarm population model and the unified cap-aware spawner.
 --
--- `game.map_settings` is the global, mutable settings table at runtime (a
--- LuaMapSettings). Its sub-tables (enemy_expansion, unit_group) are writable in
--- place and take effect
--- immediately, so applying at on_init / on_configuration_changed (and re-applying
--- when the expansion-rate setting changes) is enough — there is no per-surface
--- map_settings in 2.1; the table is map-global.
+-- A "swarm unit" is one entity that stands in for N individual zombies
+-- (population kept in storage; health = pop x single-zombie health). This keeps
+-- enormous effective numbers cheap (R-HORDE-2/3).
 --
--- Scaling: the runtime-global "zomtorio-expansion-rate" setting (default 2.0,
--- read via config.expansion_rate()) cranks the aggression — higher rate => shorter
--- expansion cooldowns and a denser map. expansion_rate 1.0 leaves cooldowns at the
--- carry-over baseline; >1 shortens them proportionally.
+-- On hit (R-HORDE-4/5): a normal hit kills one zombie's worth; an explosive (or,
+-- later, upgraded-melee) hit kills floor(damage / single-zombie-health). If the
+-- dynamic cap has room and a player is near, the cluster bursts into individuals;
+-- otherwise it just loses population. The script alone destroys the unit, at
+-- population 0 — the prototype carries huge health headroom so the engine's own
+-- damage never pre-empts this (see prototypes/entities.lua).
 --
--- S10b adds the runtime swarm-event state machine (R-GEN-5: telegraphed,
--- night-bound assaults whose duration/frequency/intensity scale with evolution)
--- plus the smaller night-escalation baseline (R-GEN-4), driven from swarm.on_tick.
--- The map-settings code (S10a) above is left untouched.
+-- spawn() is the single entry point every zombie source routes through
+-- (R-HORDE-6 / R-GEN-6): it creates individuals up to the dynamic cap, folding
+-- any overflow into higher-population swarm units rather than discarding it.
 
 local config  = require("lib.config")
 local planets = require("lib.planets")
+local tiers   = require("lib.tiers")
+local corpses = require("lib.corpses")
+local melee   = require("lib.melee")
 local util    = require("lib.util")
-local night   = require("lib.night")
-local horde   = require("lib.horde")
 
 local swarm = {}
 
--- Carry-over (1.1 control.lua init_settings) expansion baseline, in ticks, at
--- expansion_rate 1.0. The denser-than-vanilla values: small influence radii, far
--- shorter expansion cooldowns than vanilla (vanilla min/max = 14400/216000).
--- NOTE: 1.1's `min_base_spacing` is GONE in the 2.1 API (verified against
--- EnemyExpansionMapSettings) — base density is governed by the influence radii.
-local EXPANSION_BASE = {
-  max_expansion_distance         = 20,
-  enemy_building_influence_radius = 1,
-  friendly_base_influence_radius  = 1,
-  min_expansion_cooldown         = 2 * 3600,  -- 2 minutes at rate 1.0
-  max_expansion_cooldown         = 4 * 3600,  -- 4 minutes at rate 1.0
-}
+-- Damage types that multi-kill in a swarm (R-HORDE-5): explosive OR fire kill
+-- floor(damage / single-zombie-health); everything else kills exactly one per hit.
+-- "explosion"/"fire" are the area rules; "zomtorio-swarm-melee" is the S8 tech-gated
+-- swarm-melee AoE (lib/melee). The BASE punch "zomtorio-zombie-melee" is deliberately
+-- ABSENT: unupgraded melee kills exactly one (R-MELEE-1).
+local MULTI_KILL_TYPES = { explosion = true, fire = true, ["zomtorio-swarm-melee"] = true }
 
---- Apply the dense/aggressive map settings, scaled by expansion_rate. Idempotent:
---- it overwrites the same fields with the same derived values each call, so it can
---- be (re-)run at init, on configuration change, and on a setting change.
-local function apply_map_settings()
-  if not game then return end
+-- A burst (R-HORDE-4) only triggers when a character is within this radius, so
+-- abstract clusters only "become real" near a player who'd actually see them.
+local BURST_RADIUS = 32
 
-  local rate = config.expansion_rate() or 2.0
-  if rate <= 0 then rate = 1.0 end
+-- Cap the population of a single cluster so absurd counts (e.g. a megabase
+-- building's total-raw) become a handful of dense clusters rather than one
+-- entity claiming an implausible health value. Kept simple: split into clusters
+-- of at most this each.
+local MAX_CLUSTER_POP = 1000
 
-  local ms = game.map_settings
-
-  ---------------------------------------------------------------- expansion
-  -- Denser bases that expand far more often than vanilla (R-GEN-3). Higher rate
-  -- => shorter cooldowns (floored so they can't reach zero).
-  local exp = ms.enemy_expansion
-  if exp then
-    exp.enabled                        = true
-    exp.max_expansion_distance         = EXPANSION_BASE.max_expansion_distance
-    exp.enemy_building_influence_radius = EXPANSION_BASE.enemy_building_influence_radius
-    exp.friendly_base_influence_radius  = EXPANSION_BASE.friendly_base_influence_radius
-    exp.min_expansion_cooldown =
-      math.max(60, math.floor(EXPANSION_BASE.min_expansion_cooldown / rate))
-    exp.max_expansion_cooldown =
-      math.max(120, math.floor(EXPANSION_BASE.max_expansion_cooldown / rate))
-  end
-
-  ---------------------------------------------------------------- unit groups
-  -- Frequent, large, TIGHTLY-PACKED groups: short gathering time, big size cap,
-  -- small group radius (a dense swarm rather than a loose ring), members keep up.
-  local ug = ms.unit_group
-  if ug then
-    ug.max_group_gathering_time     = 2 * 3600   -- frequent swarms
-    ug.max_unit_group_size          = 500         -- large groups
-    ug.max_gathering_unit_groups    = 10          -- fewer but bigger
-    ug.max_group_radius             = 10          -- packed tight
-    ug.min_group_radius             = 0
-    ug.max_member_speedup_when_behind = 3.0       -- stragglers catch up
-    ug.member_disown_distance       = 50
-  end
-
-  -- NOTE: `steering` is data-stage-only in 2.1 — LuaMapSettings does NOT expose it
-  -- at runtime (verified: writing game.map_settings.steering errors "unknown
-  -- path"). The dense-mass feel is instead delivered by the small unit_group radius
-  -- above plus the x0.2 collision-box shrink in prototypes/tuning.lua.
+-- Reverse of tiers.INDIVIDUAL: individual-zombie prototype name -> tier. Used by
+-- the reanimation handler to recognise OUR hatched zombies and recover their tier.
+local INDIVIDUAL_TO_TIER = {}
+for tier, name in pairs(tiers.INDIVIDUAL) do
+  INDIVIDUAL_TO_TIER[name] = tier
 end
 
------------------------------------------------------------ swarm-event tuning
---
--- One Nauvis day is ~25000 ticks; the dark (night) portion the events live in is
--- ~7500 ticks (the part where night.is_night reads true). surface.ticks_per_day
--- is read when exposed so a modified day-length is respected; otherwise these
--- constants stand in.
-local DAY_TICKS   = 25000   -- full day/night cycle
-local NIGHT_TICKS = 7500    -- the dark portion an event can occupy
+--------------------------------------------------------------------- storage
+-- storage.zomtorio.swarm            : unit_number -> { pop, tier }
+-- storage.zomtorio.individuals      : unit_number -> true  (zombies WE spawned)
+-- storage.zomtorio.individual_count : running size of the above (cap accounting)
 
--- Frequency (R-GEN-5): the interval between events shrinks with evolution AND
--- with the frequency setting. At evolution 0 / frequency 1 events are ~8 days
--- apart; at evolution 1 they collapse toward ~1 day apart. A higher frequency
--- setting scales the whole interval down (2x frequency => half the wait).
-local INTERVAL_MAX_DAYS = 8.0   -- near evo 0
-local INTERVAL_MIN_DAYS = 1.0   -- near evo 1
-
--- Telegraph lead (R-GEN-5): warn the players this far ahead of the scheduled
--- start so "a swarm approaches in N days" lands with time to prepare.
-local TELEGRAPH_LEAD_TICKS = DAY_TICKS  -- ~one day's notice
-
--- Spawning cadence/intensity. The state machine itself runs every TICK_PERIOD
--- ticks; a burst happens every BURST_PERIOD ticks of an active event. Each burst
--- spawns BURST_BASE zombies scaled by intensity and evolution, capped so a single
--- tick's work stays bounded (the cap-aware spawner folds overflow into clusters).
-local TICK_PERIOD  = 60     -- the on_tick self-throttle
-local BURST_PERIOD = 60     -- one swarm burst per second of an active event
-local SWARM_BURST_BASE = 40 -- zombies per burst at intensity 1 / evolution 0
-local SWARM_BURST_CAP  = 600
-
--- Night-escalation baseline (R-GEN-4): a much smaller trickle on ordinary nights
--- (when no event is active), so nights are tenser than days but clearly below a
--- swarm event. One small burst per NIGHT_BURST_PERIOD ticks.
-local NIGHT_BURST_PERIOD = 300  -- one trickle every ~5s of night
-local NIGHT_BURST_BASE   = 4    -- attackers per trickle at multiplier 1 / evo 0
-local NIGHT_BURST_CAP    = 60
-
--- Ring distance from an anchor (player/character) to spawn at, so zombies have to
--- close the distance and the swarm reads as "approaching" (R-GEN-5). Used by the
--- night-escalation baseline (ambient pressure around the player).
-local SPAWN_RING_MIN = 40
-local SPAWN_RING_MAX = 60
-
--- A horde EVENT (R-GEN-5) instead comes from ONE direction: it appears on the
--- horizon ~HORDE_OFFSET tiles beyond the furthest factory building (10 chunks) in a
--- per-event random direction, then marches in. FACTORY_SCAN_RADIUS bounds the
--- one-off scan that finds that factory edge.
-local HORDE_OFFSET = 10 * 32        -- 10 chunks past the factory edge
-local FACTORY_SCAN_RADIUS = 1500    -- how far out to look for the factory edge
--- Small spread of each burst around the horde's spawn point (a tight incoming mass).
-local HORDE_SPAWN_JITTER = 6
-
---------------------------------------------------------------------- overrides
--- Runtime-global settings can only be written by their owning mod, so the test
--- harness (a separate mod) can't drive these. These internal hooks let a test pin
--- behaviour deterministically; nil in normal play => the live setting / evolution.
-local overrides = {}          -- { enabled, intensity, frequency, night_assault }
-local evolution_override = nil
-
-local function opt_enabled()
-  if overrides.enabled ~= nil then return overrides.enabled end
-  local v = config.swarm_events_enabled()
-  if v == nil then return true end
-  return v
+local function state()
+  storage.zomtorio = storage.zomtorio or {}
+  local z = storage.zomtorio
+  z.swarm = z.swarm or {}
+  z.individuals = z.individuals or {}
+  z.individual_count = z.individual_count or 0
+  return z
 end
 
-local function opt_intensity()
-  return overrides.intensity or config.swarm_intensity() or 1.0
-end
-
-local function opt_frequency()
-  return overrides.frequency or config.swarm_frequency() or 1.0
-end
-
-local function opt_night_assault()
-  return overrides.night_assault or config.night_assault_multiplier() or 1.5
+-- Idempotent: only creates missing tables, never wipes live state. control.lua
+-- runs this on BOTH new game and on_configuration_changed, so a mod update must
+-- not orphan the clusters / cap-count already present in an existing save.
+function swarm.on_init()
+  state()
 end
 
 --------------------------------------------------------------------- helpers
 
---- Per-surface enemy-force evolution (2.1: per-surface). Test override wins.
-local function evolution(surface)
-  if evolution_override ~= nil then return evolution_override end
-  local enemy = game and game.forces and game.forces[util.ENEMY_FORCE]
-  if not (enemy and surface and surface.valid) then return 0 end
-  local ok, e = pcall(function() return enemy.get_evolution_factor(surface) end)
-  return (ok and e) or 0
+--- Single-zombie health for a tier, read live from the individual's prototype so
+--- it auto-tracks the S10 health tuning. Falls back to 1 defensively.
+--- (2.1: LuaEntityPrototype.max_health was replaced by get_max_health(quality?).)
+local function single_health(tier)
+  local proto = prototypes.entity[tiers.INDIVIDUAL[tier]]
+  return (proto and proto.get_max_health()) or 1
 end
 
---- Length of one dark period (the window an event occupies), respecting a
---- modified day-length when the engine exposes it.
-local function night_len(surface)
-  if surface and surface.valid then
-    local ok, tpd = pcall(function() return surface.ticks_per_day end)
-    if ok and tpd and tpd > 0 then
-      -- Keep NIGHT_TICKS's share (~30%) of whatever the day actually is.
-      return math.floor(tpd * (NIGHT_TICKS / DAY_TICKS))
-    end
+--- Health to keep a cluster at: its FULL (huge) prototype max_health. Clusters do
+--- NOT reflect population in their health bar — if they did, the bar would be
+--- pop*single, and a single damage instance larger than that total (a high-tier
+--- turret/weapon vs a small cluster) would let the ENGINE kill the whole cluster in
+--- one shot, wiping the entire population instead of the one zombie our rule allows
+--- (R-HORDE-4/5). Keeping health maxed makes the cluster immune to a one-shot; the
+--- script owns every death (1 per hit, or floor(dmg/single) for explosive/fire), and
+--- population lives in storage. (pop/tier kept in the signature for call sites.)
+local function pop_health(entity, pop, tier)
+  return entity.max_health  -- 2.1: readable directly off the LuaEntity
+end
+
+-- Optional cap override. Runtime-global settings can only be written by their
+-- owning mod, so the test harness (a separate mod) can't set the cap setting;
+-- this single internal hook lets a test pin the cap deterministically. nil in
+-- normal play -> the live setting is used.
+local cap_override
+
+--- The dynamic individual-zombie cap (R-HORDE-6). Defensive default if unset.
+local function zombie_cap()
+  if cap_override ~= nil then return cap_override end
+  return config.zombie_cap() or 1000
+end
+
+-- Optional overall swarm-size multiplier override (test-only, same rationale as
+-- cap_override). nil -> the live setting.
+local size_mult_override
+
+--- The overall swarm-size multiplier (R-HORDE-7). Applied here in the unified
+--- spawner so EVERY source (death cascade, swarm events, night escalation)
+--- scales by it. Defensive default of 1.
+local function size_multiplier()
+  if size_mult_override ~= nil then return size_mult_override end
+  return config.zombie_count_multiplier() or 1
+end
+
+--- Spare capacity for individual zombies before the cap.
+local function cap_room()
+  return math.max(0, zombie_cap() - state().individual_count)
+end
+
+--- True if a character (a stand-in for "a player") is within BURST_RADIUS.
+local function character_near(surface, pos)
+  if not (surface and surface.valid) then return false end
+  local found = surface.find_entities_filtered {
+    type = "character", position = pos, radius = BURST_RADIUS, limit = 1,
+  }
+  return #found > 0
+end
+
+--- Register an individual zombie we created so the cap counts it exactly.
+local function track_individual(entity)
+  local z = state()
+  if entity and entity.valid and not z.individuals[entity.unit_number] then
+    z.individuals[entity.unit_number] = true
+    z.individual_count = z.individual_count + 1
   end
-  return NIGHT_TICKS
 end
 
-local function clamp(v, lo, hi)
-  if v < lo then return lo end
-  if v > hi then return hi end
-  return v
+--- An alt-mode text label over a cluster showing how many zombies it stands in for.
+--- The cluster's health bar can't carry this (it's pinned to full so a single hit
+--- can't one-shot the swarm), and a `unit`'s hover tooltip can't be customised, so we
+--- draw the count and reveal it when the player holds ALT (like belt item counts). The
+--- render is bound to the entity, so it's auto-destroyed when the cluster dies/bursts.
+--- (Drop `only_in_alt_mode` to make the count always visible.)
+local function pop_label(unit, pop)
+  return rendering.draw_text {
+    text = tostring(pop),
+    surface = unit.surface,
+    target = { entity = unit, offset = { 0, -1.4 } },
+    color = { r = 1, g = 0.5, b = 0.4 },
+    scale = 1.4,
+    alignment = "center",
+    vertical_alignment = "middle",
+    only_in_alt_mode = true,
+  }
 end
 
---- The swarm-event state, created lazily. Stored in storage so it survives across
---- ticks and config changes.
-local function state()
-  storage.zomtorio = storage.zomtorio or {}
-  local s = storage.zomtorio.swarm
-  if not s then
-    s = { next_event_tick = nil, warned = false, active = false,
-          period_end_tick = nil, forced_until = nil }
-    storage.zomtorio.swarm = s
-  end
-  return s
+--- Keep a cluster's pop label in sync after its population changes.
+local function update_label(rec)
+  if rec.label and rec.label.valid then rec.label.text = tostring(rec.pop) end
 end
 
---------------------------------------------------------------- pure scheduling
-
---- Interval (ticks) until the next swarm event (R-GEN-5). PURE + testable: higher
---- evolution => shorter interval (linear from INTERVAL_MAX_DAYS at evo 0 to
---- INTERVAL_MIN_DAYS at evo 1); higher frequency => proportionally shorter.
-function swarm.event_interval_ticks(evolution_factor, frequency)
-  local e = clamp(evolution_factor or 0, 0, 1)
-  local f = frequency or 1.0
-  if f <= 0 then f = 1.0 end
-  local days = INTERVAL_MAX_DAYS + (INTERVAL_MIN_DAYS - INTERVAL_MAX_DAYS) * e
-  local ticks = (days * DAY_TICKS) / f
-  -- Never let it collapse below a single dark period.
-  return math.max(NIGHT_TICKS, math.floor(ticks))
+--- Give a freshly-spawned unit/cluster an AI command (e.g. a swarm event's
+--- attack-march toward the factory). pcall-guarded and a no-op for nil.
+local function apply_command(entity, command)
+  if not command then return end
+  pcall(function() entity.commandable.set_command(command) end)
 end
 
---- Length (ticks) of the active spawning period (R-GEN-5). PURE + testable:
---- ~10% of a night at evolution 0 up to a FULL night at evolution 1.0
---- (linear: night * (0.1 + 0.9*evolution)), scaled by intensity, clamped to at
---- most one full night.
-function swarm.spawning_period_ticks(evolution_factor, intensity)
-  local e = clamp(evolution_factor or 0, 0, 1)
-  local i = intensity or 1.0
-  if i <= 0 then i = 1.0 end
-  local frac = (0.1 + 0.9 * e) * i
-  frac = clamp(frac, 0.05, 1.0)            -- never under a sliver, never over a night
-  return math.floor(NIGHT_TICKS * frac)
+--- Create one swarm-unit entity holding `pop`, record it, size its health.
+local function create_cluster(surface, pos, pop, tier, force, command)
+  local name = tiers.SWARM[tier]
+  local place = surface.find_non_colliding_position(name, pos, 16, 0.5) or pos
+  local unit = surface.create_entity { name = name, position = place, force = force }
+  if not (unit and unit.valid) then return nil end
+  local rec = { pop = pop, tier = tier }
+  rec.label = pop_label(unit, pop)
+  state().swarm[unit.unit_number] = rec
+  unit.health = pop_health(unit, pop, tier)
+  apply_command(unit, command)
+  return unit
 end
 
---------------------------------------------------------------- spawn placement
+--------------------------------------------------------------------- spawning
 
---- A point on a ring SPAWN_RING_MIN..SPAWN_RING_MAX from `pos`, seeded by `tick`
---- so successive bursts come from different directions.
-local function ring_point(pos, tick, salt)
-  local angle = ((tick * 0.137) + (salt or 0) * 1.7) % (2 * math.pi)
-  local r = SPAWN_RING_MIN + ((tick + (salt or 0) * 53) % (SPAWN_RING_MAX - SPAWN_RING_MIN))
-  return { x = pos.x + math.cos(angle) * r, y = pos.y + math.sin(angle) * r }
-end
-
---- Route `count` zombies through the unified cap-aware spawner near each anchor
---- (R-GEN-6). With no characters present (headless) it's a no-op — the event
---- still tracks state, it simply has nowhere to spawn.
-local function spawn_near_anchors(surface, count, tier, tick)
+--- Cap-aware spawn of EXACTLY `count` zombies (NO swarm-size multiplier): create
+--- individuals up to the dynamic cap, fold all overflow into swarm unit(s), never
+--- discard. The burst path uses this directly to re-spawn an already-existing
+--- (already-scaled) surviving population — applying the multiplier there too would
+--- scale it twice.
+local function do_spawn(surface, pos, count, tier, force, command)
+  count = math.floor(count or 0)
   if count <= 0 then return end
-  local chars = surface.find_entities_filtered { type = "character" }
-  local n = 0
-  for _, c in pairs(chars) do
-    if c.valid then
-      n = n + 1
-      local pos = ring_point(c.position, tick, n)
-      horde.spawn(surface, pos, count, tier, util.ENEMY_FORCE)
+  if not (surface and surface.valid) then return end
+  if not tiers.is_valid(tier) then tier = "small" end
+  force = force or util.ENEMY_FORCE
+
+  -- 1/2. Real individuals up to the cap.
+  local make_individuals = math.min(count, cap_room())
+  local individual_name = tiers.INDIVIDUAL[tier]
+  local made = 0
+  for _ = 1, make_individuals do
+    local place = surface.find_non_colliding_position(individual_name, pos, 16, 0.5) or pos
+    local biter = surface.create_entity {
+      name = individual_name, position = place, force = force,
+    }
+    if biter and biter.valid then
+      track_individual(biter)
+      apply_command(biter, command)
+      made = made + 1
     end
   end
-end
 
---- Tier for swarm spawns: shift toward tougher zombies as evolution climbs
---- (R-GEN-5 intensity grows with evolution; R-BAL-2 tier mix).
-local function swarm_tier(e)
-  if e >= 0.9 then return "big" end
-  if e >= 0.5 then return "medium" end
-  return "small"
-end
-
------------------------------------------------- directional horde (R-GEN-5)
-
---- The first player character on the surface (the horde's direction anchor and
---- march target). nil headless / when no player is present.
-local function first_character(surface)
-  local chars = surface.find_entities_filtered { type = "character" }
-  for _, c in pairs(chars) do
-    if c.valid then return c end
+  -- 3. Fold the remainder into swarm unit(s), splitting so no one cluster holds
+  -- an absurd population. Never discard zombies.
+  local remainder = count - made
+  while remainder > 0 do
+    local pop = math.min(remainder, MAX_CLUSTER_POP)
+    create_cluster(surface, pos, pop, tier, force, command)
+    remainder = remainder - pop
   end
-  return nil
-end
-
---- Distance from `center` to the furthest player-force BUILDING within
---- FACTORY_SCAN_RADIUS — i.e. the factory's edge in any direction. 0 if none.
---- Scanned once per event (events are days apart), never per tick.
-local function furthest_building(surface, center)
-  local maxd = 0
-  local ents = surface.find_entities_filtered {
-    force = "player", position = center, radius = FACTORY_SCAN_RADIUS,
-  }
-  for _, e in pairs(ents) do
-    if e.valid and e.type ~= "character" then
-      local dx, dy = e.position.x - center.x, e.position.y - center.y
-      local d = math.sqrt(dx * dx + dy * dy)
-      if d > maxd then maxd = d end
-    end
-  end
-  return maxd
-end
-
---- The horde spawn point: a per-event pseudo-random direction (seeded by tick, as
---- Math.random is unavailable), HORDE_OFFSET tiles beyond the factory edge.
-local function compute_origin(surface, anchor, tick)
-  local angle = (tick * 2.3999632) % (2 * math.pi)   -- varies per event
-  local dist = furthest_building(surface, anchor) + HORDE_OFFSET
-  return { x = anchor.x + math.cos(angle) * dist, y = anchor.y + math.sin(angle) * dist }
-end
-
---- An attack-march command that drives the swarm from its spawn point to the
---- factory, fighting anything in the way (so it "advances" rather than idling
---- out of player-scent range).
-local function march_command(target)
-  return {
-    type = defines.command.attack_area,
-    destination = target,
-    radius = 24,
-    distraction = defines.distraction.by_enemy,
-  }
-end
-
---- Remove the on-map horde warning marker, if any.
-local function clear_marker(s)
-  if s.marker and s.marker.valid then pcall(function() s.marker.destroy() end) end
-  s.marker = nil
-end
-
---- Place (or move) the on-map warning marker at `pos` for the PLAYER force, so it
---- shows on players' maps. Chart the area first so the incoming horde is visible on
---- the map ("appears on the horizon"). All pcall-guarded: a missing player force or
---- an uncharted-area refusal degrades to no marker (the gps message still warns).
-local function set_marker(surface, s, pos)
-  clear_marker(s)
-  local pf = game.forces and game.forces["player"]
-  if not pf then return end
-  pcall(function()
-    pf.chart(surface, {
-      { pos.x - 32, pos.y - 32 }, { pos.x + 32, pos.y + 32 },
-    })
-  end)
-  local ok, tag = pcall(function()
-    return pf.add_chart_tag(surface, { position = pos, text = "Horde" })
-  end)
-  if ok then s.marker = tag end
-end
-
---- Spawn one burst of the horde from its single spawn point (with a little jitter),
---- commanded to march on the factory. No-op if no origin was chosen (no player).
-local function spawn_horde(surface, s, count, tier, tick)
-  if count <= 0 or not s.origin then return end
-  local jx = ((tick * 0.31) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
-  local jy = ((tick * 0.53) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
-  local pos = { x = s.origin.x + jx, y = s.origin.y + jy }
-  local cmd = s.anchor and march_command(s.anchor) or nil
-  horde.spawn(surface, pos, count, tier, util.ENEMY_FORCE, cmd)
-end
-
---- Move the warning marker partway from the spawn point toward the factory as the
---- event runs, so it "travels with" the advancing horde (capped at 70% in so it
---- still reads as incoming).
-local function update_marker(surface, s, tick)
-  if not (s.origin and s.anchor and s.active_start and s.period_end_tick) then return end
-  local span = s.period_end_tick - s.active_start
-  local frac = span > 0 and (tick - s.active_start) / span or 0
-  frac = clamp(frac, 0, 1) * 0.7
-  s.marker_pos = {
-    x = s.origin.x + (s.anchor.x - s.origin.x) * frac,
-    y = s.origin.y + (s.anchor.y - s.origin.y) * frac,
-  }
-  set_marker(surface, s, s.marker_pos)
-end
-
---- Begin a horde: pick the single spawn point + march target, drop the on-map
---- warning marker, and announce it. `forced` (the /zomtorio-horde debug trigger)
---- makes it ignore the dawn end for its window.
-local function begin_active(s, surface, tick, dur, forced)
-  s.active = true
-  s.active_start = tick
-  s.period_end_tick = tick + dur
-  s.forced_until = forced and (tick + dur) or nil
-  s.warned = true
-  s.origin, s.anchor, s.marker_pos = nil, nil, nil
-  local char = first_character(surface)
-  if char then
-    s.anchor = { x = char.position.x, y = char.position.y }
-    s.origin = compute_origin(surface, s.anchor, tick)
-    s.marker_pos = { x = s.origin.x, y = s.origin.y }
-    set_marker(surface, s, s.marker_pos)
-    game.print("A horde is descending on the factory from [gps=" ..
-      math.floor(s.origin.x) .. "," .. math.floor(s.origin.y) .. "," .. surface.name .. "]!")
-  end
-end
-
---- End the current horde and schedule the next: clear the marker and geometry.
-local function end_active(s, surface, tick, e)
-  clear_marker(s)
-  s.active, s.active_start, s.period_end_tick, s.forced_until = false, nil, nil, nil
-  s.origin, s.anchor, s.marker_pos = nil, nil, nil
-  s.warned = false
-  s.next_event_tick = tick + swarm.event_interval_ticks(e, opt_frequency())
 end
 
 --------------------------------------------------------------------- public
 
-function swarm.on_init()
-  apply_map_settings()
-  -- Seed the event schedule without wiping live state (preserve across a config
-  -- change). Only fill a missing next_event_tick.
-  local s = state()
-  if s.next_event_tick == nil then
-    local surface = game and game.surfaces and game.surfaces[util.HOME_SURFACE]
-    local e = evolution(surface)
-    s.next_event_tick = (game and game.tick or 0)
-      + swarm.event_interval_ticks(e, opt_frequency())
-    s.warned = false
-    s.active = false
-    s.period_end_tick = nil
-  end
+--- Unified spawner (R-HORDE-6 / R-GEN-6) and the single point where the overall
+--- swarm-size multiplier (R-HORDE-7) is applied — so every generation SOURCE
+--- (death cascade, swarm events, night escalation) scales uniformly. Create
+--- `count` zombies of `tier` for `force` near `pos`, capped/clustered by do_spawn.
+--- `command` (optional) is an AI command applied to every spawned unit/cluster —
+--- used by swarm events to march the swarm at the factory from its spawn point.
+function swarm.spawn(surface, pos, count, tier, force, command)
+  count = math.floor(count or 0)
+  if count <= 0 then return end
+  -- max(1,...) so a positive request never rounds away at a low multiplier
+  -- (a building destroyed by zombies always yields at least one zombie).
+  count = math.max(1, math.floor(count * size_multiplier()))
+  do_spawn(surface, pos, count, tier, force, command)
 end
 
-function swarm.on_configuration_changed()
-  apply_map_settings()
-  swarm.on_init()  -- ensure the event state exists; does not wipe live state
+--- Spare individual-zombie capacity before the cap (R-HORDE-6). Exposed so other
+--- modules (e.g. corpse reanimation) can decide whether a new zombie stays a real
+--- individual or must be folded into a cluster.
+function swarm.cap_room()
+  return cap_room()
 end
 
---- Re-apply when the expansion-rate setting changes so the slider takes effect in
---- an existing save (R-GEN-7). Other settings here are derived from the same call,
---- so re-applying on any of ours is harmless; we gate on the expansion-rate key.
-function swarm.on_runtime_setting_changed(event)
-  if event and event.setting == "zomtorio-expansion-rate" then
-    apply_map_settings()
-  end
-end
+--- Fold `count` ALREADY-DECIDED-OVERFLOW zombies into cluster(s) near `pos`
+--- (R-HORDE-6). Unlike swarm.spawn this applies NO cap check and NO swarm-size
+--- multiplier: the caller has already decided these zombies are overflow that
+--- cannot be individuals, so they're not a fresh generation source.
+---
+--- To realise "fold overflow into HIGHER-POPULATION swarm units", we first try to
+--- merge into an existing tracked cluster of the same `tier` within a small radius
+--- of `pos` (growing it) rather than littering the area with tiny clusters; only
+--- if none exists do we create new cluster(s), split by MAX_CLUSTER_POP.
+function swarm.fold(surface, pos, count, tier, force)
+  count = math.floor(count or 0)
+  if count <= 0 then return end
+  if not (surface and surface.valid) then return end
+  if not tiers.is_valid(tier) then tier = "small" end
+  force = force or util.ENEMY_FORCE
 
---- Per-tick entry (control.lua fans this out). Self-throttled to TICK_PERIOD.
---- Drives the swarm-event state machine (R-GEN-5) and, on ordinary nights, the
---- smaller night-escalation baseline (R-GEN-4). Nauvis-only (R-SCOPE-1).
-function swarm.on_tick(event)
-  if event.tick % TICK_PERIOD ~= 0 then return end
+  local z = state()
 
-  -- R-GEN-4 (night escalation) is baseline pressure independent of the
-  -- swarm-event on/off flag (R-GEN-5); only the event branch below is gated on it.
-  local surface = game.surfaces[util.HOME_SURFACE]
-  if not (surface and surface.valid and planets.is_active(surface)) then return end
-
-  local s = state()
-  local tick = event.tick
-  local e = evolution(surface)
-  local night_now = night.is_night(surface)
-
-  ------------------------------------------------------- swarm event (R-GEN-5)
-  -- Process the active branch whenever an event is running, even if the on/off
-  -- setting is disabled: a manually forced event (swarm.force_event) must still
-  -- run and clean up. Only the SCHEDULING of new events is gated on the setting.
-  if opt_enabled() or s.active then
-    if s.next_event_tick == nil then
-      s.next_event_tick = tick + swarm.event_interval_ticks(e, opt_frequency())
-    end
-
-    if s.active then
-      -- Spawn at a greatly amplified rate from the single spawn point, marching the
-      -- swarm at the factory (R-GEN-5 / R-GEN-6).
-      if tick % BURST_PERIOD == 0 then
-        local count = math.floor(SWARM_BURST_BASE * opt_intensity() * (1 + 2 * e))
-        count = clamp(count, 1, SWARM_BURST_CAP)
-        spawn_horde(surface, s, count, swarm_tier(e), tick)
-        update_marker(surface, s, tick)
-      end
-      -- End at period_end OR at dawn — "at most one full night" (R-GEN-5). A
-      -- FORCED event ignores the dawn end until its forced window elapses, so a
-      -- debug trigger works in daylight too.
-      local forced = s.forced_until ~= nil and tick < s.forced_until
-      if tick >= (s.period_end_tick or tick) or (not night_now and not forced) then
-        end_active(s, surface, tick, e)
-      end
-    else
-      -- Telegraph once, a lead-time before the scheduled start (R-GEN-5).
-      if not s.warned and s.next_event_tick - tick <= TELEGRAPH_LEAD_TICKS then
-        local remaining = math.max(0, s.next_event_tick - tick)
-        local days = math.max(1, math.ceil(remaining / DAY_TICKS))
-        game.print("A swarm approaches in " .. days .. (days == 1 and " day" or " days"))
-        s.warned = true
-      end
-      -- Begin only once due AND it is night (R-GEN-5 night-bound start).
-      if tick >= s.next_event_tick and night_now then
-        begin_active(s, surface, tick, swarm.spawning_period_ticks(e, opt_intensity()), false)
+  -- Merge into a nearby existing cluster of the same tier if one is tracked. Match
+  -- BOTH the day and night cluster forms so a night-time swarm still merges.
+  local nearby = surface.find_entities_filtered {
+    name = tiers.SWARM_BOTH[tier], position = pos, radius = 8,
+  }
+  for _, unit in ipairs(nearby) do
+    if unit.valid then
+      local rec = z.swarm[unit.unit_number]
+      if rec then
+        rec.pop = rec.pop + count
+        unit.health = pop_health(unit, rec.pop, tier)
+        update_label(rec)
+        return
       end
     end
   end
 
-  ---------------------------------------------- night escalation (R-GEN-4)
-  -- Baseline night pressure: a small trickle on ordinary nights, never while a
-  -- swarm event is active (so the spike stays clearly bigger). Scales with the
-  -- night-assault multiplier and evolution, kept well below a swarm burst.
-  if night_now and not s.active and tick % NIGHT_BURST_PERIOD == 0 then
-    local count = math.floor(NIGHT_BURST_BASE * opt_night_assault() * (1 + e))
-    count = clamp(count, 1, NIGHT_BURST_CAP)
-    spawn_near_anchors(surface, count, swarm_tier(e), tick)
+  -- No mergeable cluster: create new one(s), split so none holds an absurd pop.
+  local remainder = count
+  while remainder > 0 do
+    local pop = math.min(remainder, MAX_CLUSTER_POP)
+    create_cluster(surface, pos, pop, tier, force)
+    remainder = remainder - pop
   end
 end
 
---- Force a horde (telegraphed attack-wave; "swarm event" in the code) to start
---- RIGHT NOW, regardless of the schedule, the on/off setting, or time of day —
---- the debug/console trigger (control.lua registers `/zomtorio-horde` for it).
---- `minutes` overrides the spawning-period length; nil uses the evolution-scaled
---- default. Returns the duration in ticks.
-function swarm.force_event(minutes)
-  local s = state()
-  local surface = game and game.surfaces and game.surfaces[util.HOME_SURFACE]
-  local tick = (game and game.tick) or 0
-  local e = evolution(surface)
-  local dur
-  if minutes and minutes > 0 then
-    dur = math.floor(minutes * 3600)
+--- A corpse spoiled and the spoilage trigger hatched a zombie (R-CORPSE-5). Route
+--- that reanimation through the dynamic cap (R-HORDE-6 / R-GEN-6) so a big pile
+--- spoiling at once can't dump hundreds of individuals: under-cap zombies stay
+--- real individuals (and now count against the cap), overflow folds into a cluster
+--- (merging into a nearby one, so a spoiling pile becomes one growing cluster).
+---
+--- Lives here, not in lib/corpses, because Factorio forbids runtime require() and
+--- a top-level corpses->swarm require would cycle (swarm requires corpses already);
+--- swarm already owns the cap (cap_room/track/fold), so this is its natural home.
+--- control.lua dispatches on_trigger_created_entity to it.
+function swarm.on_trigger_created_entity(event)
+  local entity = event and event.entity
+  if not (entity and entity.valid) then return end
+  if not planets.is_active(entity.surface) then return end
+  -- Only OUR reanimated zombies: an enemy-force `unit` whose name is one of our
+  -- individual tiers. Leaves other mods' trigger-created entities (e.g. pentapods)
+  -- entirely untouched.
+  if entity.type ~= "unit" then return end
+  if not util.is_enemy_force(entity.force) then return end
+  local tier = INDIVIDUAL_TO_TIER[entity.name]
+  if tier == nil then return end
+
+  if cap_room() > 0 then
+    -- Under the cap: it stays a real individual and now counts against the cap.
+    track_individual(entity)
   else
-    dur = swarm.spawning_period_ticks(e, opt_intensity())
+    -- Cap full: remove the hatched individual and fold it into a cluster (merged
+    -- into a nearby one by swarm.fold, so a spoiling pile accumulates into one).
+    local surface, pos = entity.surface, entity.position
+    entity.destroy()
+    swarm.fold(surface, pos, 1, tier, util.ENEMY_FORCE)
   end
-  if surface then
-    begin_active(s, surface, tick, dur, true)  -- forced: runs day or night
+end
+
+--- Handle a hit on one of our swarm units (R-HORDE-4/5). Dispatched for ALL
+--- damage right now, so the not-ours early-out is kept cheap.
+function swarm.on_entity_damaged(event)
+  local entity = event.entity
+  if not (entity and entity.valid) then return end
+  if tiers.SWARM_TO_TIER[entity.name] == nil then return end  -- not a swarm unit
+
+  local z = state()
+  local rec = z.swarm[entity.unit_number]
+  if rec == nil then return end  -- untracked swarm unit: let it die normally
+  local tier = rec.tier
+
+  local single = single_health(tier)
+  local dtype = event.damage_type and event.damage_type.name
+  local kills
+  if dtype and MULTI_KILL_TYPES[dtype] then
+    -- Use damage actually DEALT (post-resistance): swarm units inherit the
+    -- biter's resistances, so original_damage_amount would over-count kills.
+    local dealt = event.final_damage_amount or event.original_damage_amount or 0
+    kills = math.max(1, math.floor(dealt / single))
   else
-    s.active, s.period_end_tick, s.forced_until = true, tick + dur, tick + dur
+    kills = 1
   end
-  s.next_event_tick = nil
-  return dur
+
+  local surface, pos, force = entity.surface, entity.position, entity.force
+
+  -- Double-tap (R-MELEE-5): a melee kill while double-tap is on is dead-dead, so
+  -- the killed population leaves no corpse — same rule as for individual zombies.
+  local no_corpse = melee.is_dead_dead(event)
+
+  -- Burst: cap has room AND a player is near -> the cluster becomes real. The
+  -- killed zombies are gone; the survivors spawn as individuals (R-HORDE-4).
+  if cap_room() > 0 and character_near(surface, pos) then
+    local survivors = rec.pop - kills
+    z.swarm[entity.unit_number] = nil
+    entity.destroy()
+    if survivors > 0 then
+      -- Survivors are an EXISTING (already-scaled) population — re-spawn them
+      -- without re-applying the swarm-size multiplier (use do_spawn, not spawn).
+      do_spawn(surface, pos, survivors, tier, force)
+    end
+    -- The zombies the hit killed drop corpses (skipped for flame/explosion/
+    -- double-tap); a hit can't kill more than the cluster held.
+    corpses.drop(surface, pos, math.min(kills, rec.pop), dtype, no_corpse)
+    return
+  end
+
+  -- Otherwise lose population. The script is the only thing that kills the unit.
+  -- Corpses dropped = zombies ACTUALLY removed (a hit can't kill more than the
+  -- cluster holds), skipped for flame/explosion (R-CORPSE-4) / double-tap.
+  local removed = math.min(kills, rec.pop)
+  rec.pop = rec.pop - kills
+  if rec.pop <= 0 then
+    z.swarm[entity.unit_number] = nil
+    entity.destroy()
+  else
+    entity.health = pop_health(entity, rec.pop, tier)
+    update_label(rec)
+  end
+  corpses.drop(surface, pos, removed, dtype, no_corpse)
+end
+
+--- Idempotent removal from our bookkeeping. Safe to call from several remove
+--- paths (death, mined, scripted destroy) without double-counting: a
+--- unit_number already forgotten is a no-op. A tracked individual leaves the cap
+--- count; a swarm unit has its record cleared.
+local function forget(un)
+  if un == nil then return end
+  local z = state()
+  if z.individuals[un] then
+    z.individuals[un] = nil
+    z.individual_count = math.max(0, z.individual_count - 1)
+  elseif z.swarm[un] then
+    z.swarm[un] = nil
+  end
+end
+
+--- Death bookkeeping.
+function swarm.on_entity_died(event)
+  local e = event.entity
+  if e and e.valid then forget(e.unit_number) end
+end
+
+--- Bookkeeping for NON-death removals (mined, scripted destroy, platform mined),
+--- so a tracked individual that vanishes without dying can't leak its cap slot.
+function swarm.on_removed(event)
+  local e = event.entity
+  if e and e.valid then forget(e.unit_number) end
+end
+
+--- Is this individual (by unit_number) currently counted against the cap?
+function swarm.is_tracked(unit_number)
+  if unit_number == nil then return false end
+  return state().individuals[unit_number] == true
+end
+
+--- Register an externally-created individual zombie so it counts against the cap.
+--- Used by night.lua: swapping a tracked unit for its faster night variant
+--- destroys the old one (which frees its cap slot via on_removed), so the new
+--- variant must be re-tracked or the cap would silently drift down.
+function swarm.track(entity)
+  track_individual(entity)
+end
+
+--- Swap a CLUSTER entity to another cluster prototype (its day<->night variant),
+--- carrying the population record across so the swarm keeps its pop, health and
+--- label (R-NIGHT for swarms). Used by night.lua: a plain destroy+create would
+--- orphan the storage record keyed by unit_number, so the swap must be done here
+--- where that record lives. Returns the new entity (or nil). No cap impact —
+--- clusters aren't tracked individuals.
+function swarm.swap_cluster(old_entity, new_name)
+  if not (old_entity and old_entity.valid) then return nil end
+  local z = state()
+  local old_un = old_entity.unit_number
+  local rec = z.swarm[old_un]
+  local surface, pos, force = old_entity.surface, old_entity.position, old_entity.force
+  -- Preserve the active command so a swapped, charging swarm keeps its target.
+  local cmd
+  local ok, cmdable = pcall(function() return old_entity.commandable end)
+  if ok and cmdable and cmdable.valid then cmd = cmdable.command end
+
+  z.swarm[old_un] = nil           -- detach the record before destroying the old unit
+  old_entity.destroy()            -- its bound pop label auto-destroys with it
+  local unit = surface.create_entity { name = new_name, position = pos, force = force }
+  if not (unit and unit.valid) then return nil end
+
+  if rec then
+    local newrec = { pop = rec.pop, tier = rec.tier }
+    newrec.label = pop_label(unit, rec.pop)
+    z.swarm[unit.unit_number] = newrec
+    unit.health = pop_health(unit, rec.pop, rec.tier)
+  end
+  if cmd then pcall(function() unit.commandable.set_command(cmd) end) end
+  return unit
 end
 
 --------------------------------------------------------------------- test API
 
---- Test/helper: re-apply map settings AND reset the event state machine to a
---- known baseline (S10a only reset map settings; S10b repurposes this to cover
---- both, so a test gets a clean slate). Clears overrides too.
+--- Number of live individual zombies we've spawned (cap accounting).
+function swarm.active_count()
+  return state().individual_count
+end
+
+--- Population a given swarm-unit entity stands in for, or nil if not tracked.
+function swarm.pop_of(entity)
+  if not (entity and entity.valid and entity.unit_number) then return nil end
+  local rec = state().swarm[entity.unit_number]
+  return rec and rec.pop or nil
+end
+
+--- Test/debug: the current text of a cluster's pop label (the count shown in
+--- alt-mode), or nil if it has none. Lets a headless test verify the count display
+--- tracks population.
+function swarm.pop_label_text(entity)
+  if not (entity and entity.valid and entity.unit_number) then return nil end
+  local rec = state().swarm[entity.unit_number]
+  if rec and rec.label and rec.label.valid then return rec.label.text end
+  return nil
+end
+
+--- Exposed for tests/other stages that need the live single-zombie health.
+function swarm.single_health(tier)
+  return single_health(tier)
+end
+
+--- Test-only: pin (or, with nil, release) the cap. See `cap_override` above.
+function swarm.set_cap_override(n)
+  cap_override = n
+end
+
+--- Test-only: pin (or, with nil, release) the overall swarm-size multiplier.
+function swarm.set_size_multiplier_override(n)
+  size_mult_override = n
+end
+
+--- Test-only: hard-reset all bookkeeping. Production on_init is intentionally
+--- idempotent (preserves live state across a config change), so tests that need
+--- a clean slate between cases call this instead.
 function swarm.reset_state()
-  apply_map_settings()
-  overrides = {}
-  evolution_override = nil
   storage.zomtorio = storage.zomtorio or {}
-  if storage.zomtorio.swarm then clear_marker(storage.zomtorio.swarm) end
-  storage.zomtorio.swarm = {
-    next_event_tick = (game and game.tick or 0)
-      + swarm.event_interval_ticks(0, 1.0),
-    warned = false,
-    active = false,
-    period_end_tick = nil,
-    forced_until = nil,
-  }
+  storage.zomtorio.swarm = {}
+  storage.zomtorio.individuals = {}
+  storage.zomtorio.individual_count = 0
 end
-
---- Test-only: pin individual settings (each nil => live setting).
-function swarm.set_overrides(o)
-  o = o or {}
-  overrides.enabled       = o.enabled
-  overrides.intensity     = o.intensity
-  overrides.frequency     = o.frequency
-  overrides.night_assault = o.night_assault
-end
-
---- Test-only: pin (or, with nil, release) the per-surface evolution factor.
-function swarm.set_evolution_override(n)
-  evolution_override = n
-end
-
---- Test-only: schedule the next event at an absolute tick (and clear the
---- telegraph flag so the warning can re-fire for that scheduled time).
-function swarm.set_next_event_tick(t)
-  local s = state()
-  s.next_event_tick = t
-  s.warned = false
-end
-
---- Test-only: read the live event state for assertions.
-function swarm.get_state()
-  local s = state()
-  return {
-    next_event_tick = s.next_event_tick,
-    warned          = s.warned,
-    active          = s.active,
-    period_end_tick = s.period_end_tick,
-    forced_until    = s.forced_until,
-    origin          = s.origin,
-  }
-end
-
---- Test/helper: exposed tuning constants so tests can assert ratios precisely.
-swarm.NIGHT_TICKS = NIGHT_TICKS
-swarm.DAY_TICKS   = DAY_TICKS
 
 return swarm

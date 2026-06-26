@@ -85,7 +85,7 @@ function corpses.on_entity_died(event)
   if not (e and e.valid) then return end
   if e.type ~= "unit" then return end
   if not util.is_enemy_force(e.force) then return end
-  if tiers.HORDE_TO_TIER[e.name] ~= nil then return end  -- a cluster, not an individual
+  if tiers.SWARM_TO_TIER[e.name] ~= nil then return end  -- a cluster, not an individual
 
   -- A double-tap melee kill is dead-dead: no corpse, so it can't reanimate
   -- (R-MELEE-5). Melee types are otherwise NOT no-corpse — they drop normally.

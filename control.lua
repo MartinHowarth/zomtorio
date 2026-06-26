@@ -31,7 +31,7 @@ local function on_configuration_changed()
     if m.on_init then m.on_init() end
   end
   if raw_cost.on_configuration_changed then raw_cost.on_configuration_changed() end
-  if swarm.on_configuration_changed then swarm.on_configuration_changed() end
+  if horde.on_configuration_changed then horde.on_configuration_changed() end
 end
 
 script.on_init(on_init)
@@ -43,7 +43,7 @@ script.on_event(defines.events.on_tick, function(event)
   infection.on_tick(event)
   contagion.on_tick(event)
   night.on_tick(event)
-  swarm.on_tick(event)
+  horde.on_tick(event)
 end)
 
 ------------------------------------------------------------------- damage
@@ -54,7 +54,7 @@ end)
 -- validity check before any work), which is the real safeguard against per-hit cost.
 script.on_event(defines.events.on_entity_damaged, function(event)
   infection.on_entity_damaged(event)
-  horde.on_entity_damaged(event)
+  swarm.on_entity_damaged(event)
   melee.on_entity_damaged(event)
 end)
 
@@ -65,14 +65,14 @@ end)
 script.on_event(defines.events.on_entity_died, function(event)
   spawning.on_entity_died(event)
   corpses.on_entity_died(event)
-  horde.on_entity_died(event)
+  swarm.on_entity_died(event)
   contagion.on_removed(event)  -- a dead entity also leaves the mover registry
 end)
 
 ------------------------------------------------------------------- reanimation
 -- A spoiled corpse hatched a zombie; route it through the dynamic cap.
 script.on_event(defines.events.on_trigger_created_entity, function(event)
-  horde.on_trigger_created_entity(event)
+  swarm.on_trigger_created_entity(event)
 end)
 
 ------------------------------------------------------------------- nest output
@@ -109,7 +109,7 @@ local remove_events = {
 for _, e in ipairs(remove_events) do
   script.on_event(e, function(event)
     contagion.on_removed(event)
-    horde.on_removed(event)  -- a mined/destroyed individual must free its cap slot
+    swarm.on_removed(event)  -- a mined/destroyed individual must free its cap slot
   end)
 end
 
@@ -132,7 +132,7 @@ end)
 
 ------------------------------------------------------------------- settings
 script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
-  swarm.on_runtime_setting_changed(event)
+  horde.on_runtime_setting_changed(event)
 end)
 
 ------------------------------------------------------------------- commands
@@ -144,7 +144,7 @@ commands.add_command(
   "Start a Zomtorio horde (attack wave) now. Optional: duration in minutes.",
   function(cmd)
     local mins = tonumber(cmd.parameter)
-    local dur = swarm.force_event(mins)
+    local dur = horde.force_event(mins)
     game.print("Zomtorio: a horde is attacking now (" ..
       (math.floor(dur / 3600 * 10) / 10) .. " min). Defend!")
   end

@@ -19,10 +19,10 @@ tiers.INDIVIDUAL = {
 }
 
 -- tier -> the horde-unit (cluster) entity prototype name (created in the data stage).
-tiers.HORDE = {
-  small  = "zomtorio-horde-small",
-  medium = "zomtorio-horde-medium",
-  big    = "zomtorio-horde-big",
+tiers.SWARM = {
+  small  = "zomtorio-swarm-small",
+  medium = "zomtorio-swarm-medium",
+  big    = "zomtorio-swarm-big",
 }
 
 -- Suffix that turns any day prototype into its faster night variant (R-NIGHT).
@@ -33,33 +33,33 @@ tiers.NIGHT_SUFFIX = "-zomtorio-night"
 -- tier -> the night-variant cluster prototype name (created in prototypes/night.lua,
 -- which clones each cluster). So swarms (clusters), like loose biters, get a faster
 -- night form to swap to.
-tiers.HORDE_NIGHT = {}
-for tier, name in pairs(tiers.HORDE) do
-  tiers.HORDE_NIGHT[tier] = name .. tiers.NIGHT_SUFFIX
+tiers.SWARM_NIGHT = {}
+for tier, name in pairs(tiers.SWARM) do
+  tiers.SWARM_NIGHT[tier] = name .. tiers.NIGHT_SUFFIX
 end
 
 -- tier -> { day cluster name, night cluster name } for find_entities_filtered name
 -- lists that must catch a cluster in either form (fold merge, nest swarm measure).
-tiers.HORDE_BOTH = {}
-for tier, name in pairs(tiers.HORDE) do
-  tiers.HORDE_BOTH[tier] = { name, tiers.HORDE_NIGHT[tier] }
+tiers.SWARM_BOTH = {}
+for tier, name in pairs(tiers.SWARM) do
+  tiers.SWARM_BOTH[tier] = { name, tiers.SWARM_NIGHT[tier] }
 end
 
 -- Flat list of every cluster prototype name (day + night), for sweeps that don't
 -- care about tier (nest swarm sum, the data-stage tuning pass).
-tiers.HORDE_ALL = {}
-for tier, name in pairs(tiers.HORDE) do
-  tiers.HORDE_ALL[#tiers.HORDE_ALL + 1] = name
-  tiers.HORDE_ALL[#tiers.HORDE_ALL + 1] = tiers.HORDE_NIGHT[tier]
+tiers.SWARM_ALL = {}
+for tier, name in pairs(tiers.SWARM) do
+  tiers.SWARM_ALL[#tiers.SWARM_ALL + 1] = name
+  tiers.SWARM_ALL[#tiers.SWARM_ALL + 1] = tiers.SWARM_NIGHT[tier]
 end
 
 -- Reverse lookup: cluster prototype name -> tier, for both the day and night forms,
 -- so the runtime damage/corpse handlers recognise a night-variant cluster as one of
 -- ours just like the day form. A cheap "is this one of our clusters?" check.
-tiers.HORDE_TO_TIER = {}
-for tier, name in pairs(tiers.HORDE) do
-  tiers.HORDE_TO_TIER[name] = tier
-  tiers.HORDE_TO_TIER[tiers.HORDE_NIGHT[tier]] = tier
+tiers.SWARM_TO_TIER = {}
+for tier, name in pairs(tiers.SWARM) do
+  tiers.SWARM_TO_TIER[name] = tier
+  tiers.SWARM_TO_TIER[tiers.SWARM_NIGHT[tier]] = tier
 end
 
 function tiers.is_valid(tier)

@@ -61,7 +61,7 @@ for _, tier in ipairs(tiers.ORDER) do
   local source = data.raw.unit[tiers.INDIVIDUAL[tier]]
   if source then
     local horde = util.table.deepcopy(source)
-    horde.name = tiers.HORDE[tier]
+    horde.name = tiers.SWARM[tier]
     -- keep it discoverable in the same family but ordered after the biters
     horde.order = (horde.order or "b") .. "-zomtorio-horde"
 

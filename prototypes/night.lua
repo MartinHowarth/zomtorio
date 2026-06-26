@@ -27,7 +27,7 @@ local NIGHT_VARIANTS = {
   "small-biter", "medium-biter", "big-biter", "behemoth-biter",
   "small-spitter", "medium-spitter", "big-spitter", "behemoth-spitter",
 }
-for _, cluster_name in pairs(tiers.HORDE) do
+for _, cluster_name in pairs(tiers.SWARM) do
   NIGHT_VARIANTS[#NIGHT_VARIANTS + 1] = cluster_name
 end
 

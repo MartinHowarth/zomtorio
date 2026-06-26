@@ -3,15 +3,15 @@
 -- __zomtorio__ require path so the drop logic and prototype config under test are
 -- the production code.
 --
--- Why we call corpses.on_entity_died / horde.on_entity_damaged DIRECTLY: each mod
--- has its OWN Lua state and `storage`. The horde instance loaded here shares the
--- storage our horde.spawn writes to, so its clusters (and the corpses their hits
+-- Why we call corpses.on_entity_died / swarm.on_entity_damaged DIRECTLY: each mod
+-- has its OWN Lua state and `storage`. The swarm instance loaded here shares the
+-- storage our swarm.spawn writes to, so its clusters (and the corpses their hits
 -- drop) are inspectable from here. Corpses themselves are ground entities visible
 -- to every mod, so we count them straight off the surface.
 
 local T       = require("harness.runner")
 local corpses = require("__zomtorio__.lib.corpses")
-local horde   = require("__zomtorio__.lib.horde")
+local swarm   = require("__zomtorio__.lib.swarm")
 local tiers   = require("__zomtorio__.lib.tiers")
 
 local CORPSE_ITEM = "zomtorio-corpse"
@@ -83,16 +83,16 @@ T.test("a non-enemy unit death drops no corpse", function(t)
   t.assert.equal(0, ground_corpses(t.surface, o), "only enemy zombies drop corpses")
 end)
 
--- A horde-unit cluster's OWN death must NOT drop corpses here (its population
--- kills are dropped by lib/horde at the hit) — otherwise it double-counts.
-T.test("a horde-unit cluster death drops no corpse via on_entity_died", function(t)
-  horde.reset_state()
-  horde.set_cap_override(0)
+-- A swarm-unit cluster's OWN death must NOT drop corpses here (its population
+-- kills are dropped by lib/swarm at the hit) — otherwise it double-counts.
+T.test("a swarm-unit cluster death drops no corpse via on_entity_died", function(t)
+  swarm.reset_state()
+  swarm.set_cap_override(0)
   local o = t.test_origin
   t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 5, "small", "enemy")
+  swarm.spawn(t.surface, o, 5, "small", "enemy")
   local found = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 32,
+    name = tiers.SWARM.small, position = o, radius = 32,
   }
   local cluster = found[1]
   t.assert.not_nil(cluster, "cluster should exist")
@@ -102,22 +102,22 @@ T.test("a horde-unit cluster death drops no corpse via on_entity_died", function
   t.assert.equal(0, ground_corpses(t.surface, o), "cluster death excluded from per-individual drop")
 end)
 
--- ------------------------------------------- horde cluster kills DROP corpses
+-- ------------------------------------------- swarm cluster kills DROP corpses
 -- A normal hit removes 1 population and that 1 zombie drops a corpse.
 T.test("a normal cluster hit drops corpses for the zombies killed", function(t)
-  horde.reset_state()
-  horde.set_cap_override(0)  -- no individuals, no burst -> pure decrement
+  swarm.reset_state()
+  swarm.set_cap_override(0)  -- no individuals, no burst -> pure decrement
   local o = t.test_origin
   t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 10, "small", "enemy")
+  swarm.spawn(t.surface, o, 10, "small", "enemy")
   local found = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 32,
+    name = tiers.SWARM.small, position = o, radius = 32,
   }
   local cluster = found[1]
   t.assert.not_nil(cluster, "cluster should exist")
 
   cluster.damage(5, "player", "physical")
-  horde.on_entity_damaged {
+  swarm.on_entity_damaged {
     entity = cluster,
     damage_type = { name = "physical" },
     original_damage_amount = 5,
@@ -127,24 +127,24 @@ T.test("a normal cluster hit drops corpses for the zombies killed", function(t)
   t.assert.equal(1, ground_corpses(t.surface, o), "a normal hit kills 1 -> 1 corpse")
 end)
 
--- An explosion multi-kills in horde, but explosion is a no-corpse damage type
+-- An explosion multi-kills in swarm, but explosion is a no-corpse damage type
 -- (R-CORPSE-4): the killed zombies leave NO corpses.
 T.test("an explosive cluster hit drops no corpses", function(t)
-  horde.reset_state()
-  horde.set_cap_override(0)
+  swarm.reset_state()
+  swarm.set_cap_override(0)
   local o = t.test_origin
   t.world.clear(t.surface, o)
-  horde.spawn(t.surface, o, 60, "small", "enemy")
+  swarm.spawn(t.surface, o, 60, "small", "enemy")
   local found = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 32,
+    name = tiers.SWARM.small, position = o, radius = 32,
   }
   local cluster = found[1]
   t.assert.not_nil(cluster, "cluster should exist")
 
-  local single = horde.single_health("small")
+  local single = swarm.single_health("small")
   local dmg = single * 7
   cluster.damage(dmg, "player", "explosion")
-  horde.on_entity_damaged {
+  swarm.on_entity_damaged {
     entity = cluster,
     damage_type = { name = "explosion" },
     original_damage_amount = dmg,
@@ -256,87 +256,87 @@ T.test("a spoiled corpse reanimates into an enemy zombie", {
 -- A reanimated zombie while the cap has room stays a real individual AND now
 -- counts against the cap (so a pile can't blow past the cap).
 T.test("a reanimated zombie under the cap is tracked as an individual", function(t)
-  horde.reset_state()
-  horde.set_cap_override(1000)
+  swarm.reset_state()
+  swarm.set_cap_override(1000)
   local o = t.test_origin
   t.world.clear(t.surface, o)
   local biter = t.world.place(t.surface, "small-biter", o, { force = "enemy" })
 
-  horde.on_trigger_created_entity { entity = biter }
+  swarm.on_trigger_created_entity { entity = biter }
 
   t.assert.is_true(biter.valid, "under-cap reanimation stays a real individual")
-  t.assert.is_true(horde.is_tracked(biter.unit_number), "and now counts against the cap")
+  t.assert.is_true(swarm.is_tracked(biter.unit_number), "and now counts against the cap")
 end)
 
 -- When the cap is full the hatched individual is removed and folded into a
 -- cluster; a pile reanimating near the same spot MERGES into one growing cluster.
 T.test("a reanimated zombie over the cap folds into a cluster (and merges)", function(t)
-  horde.reset_state()
-  horde.set_cap_override(0)  -- cap full: everything must fold
+  swarm.reset_state()
+  swarm.set_cap_override(0)  -- cap full: everything must fold
   local o = t.test_origin
   t.world.clear(t.surface, o)
 
   local b1 = t.world.place(t.surface, "small-biter", o, { force = "enemy" })
-  horde.on_trigger_created_entity { entity = b1 }
+  swarm.on_trigger_created_entity { entity = b1 }
   t.assert.is_false(b1.valid, "over-cap reanimation is removed (folded)")
 
   local b2 = t.world.place(t.surface, "small-biter", o, { force = "enemy" })
-  horde.on_trigger_created_entity { entity = b2 }
+  swarm.on_trigger_created_entity { entity = b2 }
 
   local clusters = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 16,
+    name = tiers.SWARM.small, position = o, radius = 16,
   }
   local total_pop = 0
-  for _, c in ipairs(clusters) do total_pop = total_pop + (horde.pop_of(c) or 0) end
+  for _, c in ipairs(clusters) do total_pop = total_pop + (swarm.pop_of(c) or 0) end
   t.assert.equal(1, #clusters, "two reanimations near the same spot merge into one cluster")
   t.assert.equal(2, total_pop, "the merged cluster holds both folded zombies")
 end)
 
--- horde.fold merges into a nearby existing cluster of the same tier and applies
--- NO horde-size multiplier (overflow is not a fresh generation source).
-T.test("horde.fold merges into a nearby cluster without multiplier", function(t)
-  horde.reset_state()
-  horde.set_cap_override(0)
-  horde.set_size_multiplier_override(10)  -- would 10x if fold wrongly applied it
+-- swarm.fold merges into a nearby existing cluster of the same tier and applies
+-- NO swarm-size multiplier (overflow is not a fresh generation source).
+T.test("swarm.fold merges into a nearby cluster without multiplier", function(t)
+  swarm.reset_state()
+  swarm.set_cap_override(0)
+  swarm.set_size_multiplier_override(10)  -- would 10x if fold wrongly applied it
   local o = t.test_origin
   t.world.clear(t.surface, o)
 
-  horde.fold(t.surface, o, 3, "small", "enemy")
-  horde.fold(t.surface, { x = o.x + 2, y = o.y }, 2, "small", "enemy")
+  swarm.fold(t.surface, o, 3, "small", "enemy")
+  swarm.fold(t.surface, { x = o.x + 2, y = o.y }, 2, "small", "enemy")
 
   local clusters = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 16,
+    name = tiers.SWARM.small, position = o, radius = 16,
   }
   t.assert.equal(1, #clusters, "the second fold merged into the first cluster")
-  t.assert.equal(5, horde.pop_of(clusters[1]), "merged pop is 3+2 with no multiplier applied")
+  t.assert.equal(5, swarm.pop_of(clusters[1]), "merged pop is 3+2 with no multiplier applied")
 
-  horde.set_size_multiplier_override(nil)
+  swarm.set_size_multiplier_override(nil)
 end)
 
 -- Trigger-created entities that aren't OUR reanimated zombies are left untouched:
 -- no tracking, no fold, entity not destroyed.
 T.test("non-zombie trigger-created entities are ignored", function(t)
-  horde.reset_state()
-  horde.set_cap_override(0)
+  swarm.reset_state()
+  swarm.set_cap_override(0)
   local o = t.test_origin
   t.world.clear(t.surface, o)
 
   -- A neutral-force tree: wrong type and wrong force, so the handler must skip it.
   local tree = t.surface.create_entity { name = "tree-01", position = o }
   if tree then
-    horde.on_trigger_created_entity { entity = tree }
+    swarm.on_trigger_created_entity { entity = tree }
     t.assert.is_true(tree.valid, "an unrelated trigger-created entity is untouched")
   end
 
   -- A player-force biter is the right type but the wrong force: also skipped.
   local friendly = t.world.place(t.surface, "small-biter",
     { x = o.x + 3, y = o.y }, { force = "player" })
-  horde.on_trigger_created_entity { entity = friendly }
+  swarm.on_trigger_created_entity { entity = friendly }
   t.assert.is_true(friendly.valid, "a non-enemy unit is not folded")
-  t.assert.is_false(horde.is_tracked(friendly.unit_number), "and not tracked")
+  t.assert.is_false(swarm.is_tracked(friendly.unit_number), "and not tracked")
 
   local clusters = t.surface.find_entities_filtered {
-    name = tiers.HORDE.small, position = o, radius = 16,
+    name = tiers.SWARM.small, position = o, radius = 16,
   }
   t.assert.equal(0, #clusters, "no cluster created from ignored entities")
 end)

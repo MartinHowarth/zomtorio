@@ -147,6 +147,30 @@ T.test("passive regen is suppressed while infected (R-PINF-4)", function(t)
   t.assert.is_true(char.health < before, "health continues on the DoT trajectory")
 end)
 
+-- ---------------------------------------------------------- always-on marker
+-- BUG (flagged): the infection warning icon on the player must be visible WITHOUT
+-- holding Alt (unlike the building marker, which is alt-mode-only). Defends that an
+-- infected character gets a marker whose only_in_alt_mode is false, and that the
+-- marker is cleared on cure so it can't linger on a healthy player.
+T.test("an infected player shows an always-visible (non-alt-mode) marker, cleared on cure", function(t)
+  reset()
+  infection.set_ticks_override(600)
+  local char = make_character(t)
+  char.health = 100
+  infection.on_tick { tick = game.tick }
+  hit(char, { final_health = 90 })
+  t.assert.is_true(infection.is_player_infected(char), "infected at t0")
+
+  t.assert.equal(false, infection.player_marker_alt_mode(char),
+    "player marker must be always-visible (only_in_alt_mode == false)")
+
+  -- A real heal cures and must remove the marker (no stale icon on a healthy player).
+  char.health = math.min(char.health + 50, char.max_health - 1)
+  tick_n(1)
+  t.assert.is_false(infection.is_player_infected(char), "cured by heal")
+  t.assert.equal(nil, infection.player_marker_alt_mode(char), "marker removed on cure")
+end)
+
 -- ---------------------------------------------------------- net heal cures
 -- A real heal (above HEAL_EPSILON) clears the infection and stops the DoT,
 -- leaving the character at the healed value (R-PINF-5).

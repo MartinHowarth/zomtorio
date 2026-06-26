@@ -241,3 +241,36 @@ T.test("double-tap is on by default once the unlocking tech is researched", func
   clear_tech()
   melee.reset_state()  -- clear the force default so later specs aren't affected
 end)
+
+-- ---------------------------------------------------------- tech research cost
+-- BUG (flagged): the two melee techs had the wrong cost. Defends the agreed costs
+-- so they can't silently drift: tier 1 = 10 red (automation) only; tier 2 = 20 red
+-- + 20 green (automation + logistic). Read straight off the prototypes.
+local function ing_amount(ingredients, name)
+  for _, ing in pairs(ingredients) do
+    local n = ing.name or ing[1]
+    if n == name then return ing.amount or ing[2] end
+  end
+  return nil
+end
+
+T.test("melee tech 1 costs 10 red only; tech 2 costs 20 red + 20 green", function(t)
+  local t1 = prototypes.technology[TIER_1]
+  local t2 = prototypes.technology[TIER_2]
+  t.assert.not_nil(t1, "tier-1 tech exists")
+  t.assert.not_nil(t2, "tier-2 tech exists")
+
+  -- count is the number of science-pack "cycles"; each ingredient lists 1 pack per
+  -- cycle, so total packs = count * per-cycle amount.
+  t.assert.equal(10, t1.research_unit_count, "tier 1 = 10 cycles")
+  t.assert.equal(1, ing_amount(t1.research_unit_ingredients, "automation-science-pack"),
+    "tier 1 uses red science")
+  t.assert.equal(nil, ing_amount(t1.research_unit_ingredients, "logistic-science-pack"),
+    "tier 1 uses NO green science")
+
+  t.assert.equal(20, t2.research_unit_count, "tier 2 = 20 cycles")
+  t.assert.equal(1, ing_amount(t2.research_unit_ingredients, "automation-science-pack"),
+    "tier 2 uses red science")
+  t.assert.equal(1, ing_amount(t2.research_unit_ingredients, "logistic-science-pack"),
+    "tier 2 uses green science")
+end)

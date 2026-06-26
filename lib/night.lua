@@ -106,10 +106,68 @@ function night.on_init()
   -- with the other modules' init contract.
 end
 
+--- Where to anchor the sweep: every observed point on the surface — placed
+--- characters AND connected players' controller positions (so it also works in
+--- sandbox/editor/spectator, where there is NO character but the player still has a
+--- position; bug: night speed never changed in sandbox because we only looked for
+--- characters). Deduped on a coarse grid so a player WITH a character isn't swept
+--- twice. Empty headless (no players, no characters) => the sweep is a no-op.
+local function anchor_positions(surface)
+  local seen, anchors = {}, {}
+  local function add(pos)
+    if not pos then return end
+    local key = math.floor(pos.x / SWEEP_RADIUS) .. ":" .. math.floor(pos.y / SWEEP_RADIUS)
+    if not seen[key] then
+      seen[key] = true
+      anchors[#anchors + 1] = pos
+    end
+  end
+  for _, char in pairs(surface.find_entities_filtered { type = "character" }) do
+    if char.valid then add(char.position) end
+  end
+  for _, player in pairs(game.connected_players) do
+    if player.valid and player.surface == surface then
+      local ok, pos = pcall(function() return player.position end)
+      if ok then add(pos) end
+    end
+  end
+  return anchors
+end
+
+--- Swap one enemy unit toward the correct day/night form, or skip it if it is
+--- ALREADY in that form. CRITICAL: only day->night at night and night->day by day
+--- (and never touch a unit already correct). The old single-expression form
+--- (`night_now and night_variant_of(u) or day_form_of(u)`) swapped a NIGHT variant
+--- BACK to day at night — night_variant_of returns nil for an already-night unit,
+--- so it fell through to day_form_of — and the next sweep re-swapped it, making
+--- zombies visibly stutter slow<->fast every sweep. This split fixes that.
+local function swap_unit(surface, u, night_now)
+  local target
+  if night_now then
+    if not is_night_variant(u.name) then target = night_variant_of(u.name) end
+  else
+    if is_night_variant(u.name) then target = day_form_of(u.name) end
+  end
+  if not target then return end
+
+  if tiers.SWARM_TO_TIER[u.name] then
+    -- A cluster (swarm): swap via swarm so its population record (pop, health,
+    -- label) is carried across rather than orphaned.
+    swarm.swap_cluster(u, target)
+  else
+    -- An individual: preserve cap accounting across the destroy+recreate swap — if
+    -- it was a tracked individual, re-track the replacement so the cap count doesn't
+    -- drift down (see swarm.track).
+    local was_tracked = swarm.is_tracked(u.unit_number)
+    local new = swap_to(surface, u, target)
+    if was_tracked and new and new.valid then swarm.track(new) end
+  end
+end
+
 --- Per-tick entry (control.lua fans this out). Self-throttled to SWEEP_PERIOD.
 --- At night it swaps nearby enemy day-units to their faster night variant; by
 --- day it swaps any lingering night variants back. Only ever touches enemy units
---- near a character — the deliberate UPS-safe scoping (see file header).
+--- near an observed point — the deliberate UPS-safe scoping (see file header).
 function night.on_tick(event)
   if event.tick % SWEEP_PERIOD ~= 0 then return end
 
@@ -118,34 +176,12 @@ function night.on_tick(event)
 
   local night_now = surface.darkness > NIGHT_THRESHOLD
 
-  -- With no characters present (e.g. a headless server with no players) this is
-  -- a no-op: nothing observes the speed, so nothing needs swapping.
-  local characters = surface.find_entities_filtered { type = "character" }
-  for _, char in pairs(characters) do
-    if char.valid then
-      local units = surface.find_entities_filtered {
-        type = "unit", force = util.ENEMY_FORCE,
-        position = char.position, radius = SWEEP_RADIUS,
-      }
-      for _, u in pairs(units) do
-        if u.valid then
-          local target = night_now and night_variant_of(u.name) or day_form_of(u.name)
-          if target then
-            if tiers.SWARM_TO_TIER[u.name] then
-              -- A cluster (swarm): swap via swarm so its population record (pop,
-              -- health, label) is carried across rather than orphaned.
-              swarm.swap_cluster(u, target)
-            else
-              -- An individual: preserve cap accounting across the destroy+recreate
-              -- swap — if it was a tracked individual, re-track the replacement so
-              -- the cap count doesn't drift down (see swarm.track).
-              local was_tracked = swarm.is_tracked(u.unit_number)
-              local new = swap_to(surface, u, target)
-              if was_tracked and new and new.valid then swarm.track(new) end
-            end
-          end
-        end
-      end
+  for _, pos in ipairs(anchor_positions(surface)) do
+    local units = surface.find_entities_filtered {
+      type = "unit", force = util.ENEMY_FORCE, position = pos, radius = SWEEP_RADIUS,
+    }
+    for _, u in pairs(units) do
+      if u.valid then swap_unit(surface, u, night_now) end
     end
   end
 end

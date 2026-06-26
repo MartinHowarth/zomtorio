@@ -37,6 +37,13 @@ for _, base_name in ipairs(NIGHT_VARIANTS) do
     local night = table.deepcopy(base)
     night.name = base_name .. tiers.NIGHT_SUFFIX
     night.movement_speed = (base.movement_speed or 0.1) * factor
+    -- Reuse the BASE entity's display name + a shared description, so the renamed
+    -- variant doesn't render "unknown key: entity-name.<...>-zomtorio-night" in the
+    -- tooltip (its auto-derived locale key doesn't exist). The cluster bases
+    -- ("zomtorio-swarm-small" etc.) and the vanilla biters both have an
+    -- entity-name.<base> key, so this resolves for every variant.
+    night.localised_name = { "entity-name." .. base_name }
+    night.localised_description = { "zomtorio.night-variant-desc" }
     -- Night variants are an internal swap target, not a separately-spawnable or
     -- map-listed enemy. Hide from selection/listings; keep collision/combat.
     night.hidden = true

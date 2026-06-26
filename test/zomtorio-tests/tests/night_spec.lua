@@ -92,6 +92,49 @@ T.test("night swaps a nearby enemy unit to its faster night variant", {
   end },
 })
 
+------------------------------------------- no flip-flop (stutter) regression
+
+-- BUG (flagged): at night, zombies visibly stuttered slow<->fast every sweep. Cause:
+-- the target was `night_now and night_variant_of(u) or day_form_of(u)`; for a unit
+-- ALREADY a night variant, night_variant_of returned nil (no double-suffix proto), so
+-- it fell through to day_form_of and swapped it BACK to day every sweep. This test
+-- defends the fix: a unit already in its night variant must be LEFT ALONE by a second
+-- sweep (same unit_number, not destroyed+recreated).
+T.test("a night variant is not re-swapped on the next sweep (no stutter)", {
+  function(t)
+    set_midnight(t.surface)
+  end,
+  { after = 90, fn = function(t)
+    t.assert.is_true(night.is_night(t.surface), "precondition: night has settled")
+    t.world.clear(t.surface, t.test_origin, 12)
+    local char = t.world.place(t.surface, "character", t.test_origin, { force = "player" })
+    char.destructible = false
+    t.world.place(t.surface, "small-biter",
+      { x = t.test_origin.x + 6, y = t.test_origin.y }, { force = "enemy" })
+
+    night.sweep_now()  -- day -> night variant
+
+    local function find_variant()
+      for _, u in pairs(t.surface.find_entities_filtered {
+        type = "unit", force = "enemy", position = t.test_origin, radius = 16,
+      }) do
+        if night.is_night_variant(u.name) then return u end
+      end
+      return nil
+    end
+    local v1 = find_variant()
+    t.assert.not_nil(v1, "first sweep makes it a night variant")
+    local un = v1.unit_number
+
+    night.sweep_now()  -- second sweep: must NOT touch the already-night unit
+
+    local v2 = find_variant()
+    t.assert.not_nil(v2, "still a night variant after a second sweep (not flipped to day)")
+    t.assert.equal(un, v2.unit_number,
+      "the SAME entity persists — it was not destroyed+recreated (no flip-flop)")
+  end },
+})
+
 ------------------------------------------- night swaps a swarm cluster too
 
 -- Swarms (clusters) speed up at night like loose biters: the sweep swaps a cluster

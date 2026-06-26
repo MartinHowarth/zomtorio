@@ -204,6 +204,22 @@ local function make_marker(entity)
   }
 end
 
+--- Create the biohazard marker over an infected CHARACTER. Unlike the building
+--- marker this is ALWAYS visible (only_in_alt_mode = false): the player must see at
+--- a glance that they're infected without holding Alt (R-PINF visual). Drawn a little
+--- higher so it sits above the character.
+local function make_player_marker(character)
+  return rendering.draw_sprite {
+    sprite = "zomtorio-biohazard",
+    target = { entity = character, offset = { 0, -2.2 } },
+    surface = character.surface,
+    only_in_alt_mode = false,
+    render_layer = "entity-info-icon",
+    x_scale = 0.6,
+    y_scale = 0.6,
+  }
+end
+
 --- Destroy an infected record's marker if it still exists. Safe to call from any
 --- removal path; a marker whose entity already died is auto-destroyed by the
 --- engine, so this just clears our reference.
@@ -314,7 +330,12 @@ local function infect_character(character)
   local ps = player_state()
   local un = character.unit_number
   if ps.records[un] then return end  -- idempotent
-  ps.records[un] = { character = character, floor_health = character.health }
+  ps.records[un] = {
+    character = character,
+    floor_health = character.health,
+    -- Always-on biohazard marker so the player sees the infection without Alt.
+    marker = make_player_marker(character),
+  }
 end
 
 --- Player (character) bite path of on_entity_damaged. Caller guarantees the
@@ -404,8 +425,10 @@ local function process_players(now)
   for un, rec in pairs(ps.records) do
     local c = rec.character
     if not (c and c.valid) then
+      destroy_marker(rec)
       ps.records[un] = nil
     elseif c.health > rec.floor_health + HEAL_EPSILON then
+      destroy_marker(rec)
       ps.records[un] = nil  -- net heal -> cure (R-PINF-5); leave the character healed
     else
       local ticks = infection_ticks()
@@ -416,6 +439,7 @@ local function process_players(now)
         local dot = c.max_health / ticks
         local new = base - dot
         if new <= 0 then
+          destroy_marker(rec)
           c.die(enemy_force())  -- killed by the infection (attributed to the enemy)
           ps.records[un] = nil
         else
@@ -515,6 +539,16 @@ function infection.has_marker(entity)
   if not (entity and entity.valid and entity.unit_number) then return false end
   local rec = state().infected[entity.unit_number]
   return rec ~= nil and rec.marker ~= nil and rec.marker.valid
+end
+
+--- Test helper: the only_in_alt_mode flag of an infected CHARACTER's marker, or nil
+--- if there's no live marker. Used to defend that the player infection icon shows
+--- WITHOUT alt-mode (it must be false), unlike the building marker.
+function infection.player_marker_alt_mode(character)
+  if not (character and character.valid and character.unit_number) then return nil end
+  local rec = player_state().records[character.unit_number]
+  if not (rec and rec.marker and rec.marker.valid) then return nil end
+  return rec.marker.only_in_alt_mode
 end
 
 return infection

@@ -498,7 +498,14 @@ local function sweep_frontier(c, fname, cname, count, now, has_contents, spread_
     elseif not infection.is_infected(e) then
       remove = true                                   -- cured or died (R-CONT-4)
     elseif now < rec.spread_at then
-      -- Not yet its travel time; leave it pending.
+      -- Not yet its travel time, but STILL sample presence every visit so
+      -- `last_active` tracks flow. A single item can ride all the way across a belt
+      -- (a yellow belt tile is ~32 ticks) between two spread_at instants, so sampling
+      -- only when the timer is ready would miss that lone item entirely — the belt
+      -- would then need a SECOND item to be present at some later sample before it
+      -- ever spread (the sluggish "needs another item" behaviour seen in play). The
+      -- cost is bounded by the per-tick budget like every other visit (R-CONT-7).
+      if has_contents(e) then rec.last_active = now end
     else
       -- Active if it carries now OR carried within ACTIVE_WINDOW — so intermittent
       -- flow (a gap between items at the sampling instant) doesn't stall spread

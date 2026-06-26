@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 2.0.1
+Date: 2026-06-26
+  Bugfixes:
+    - Fixed the mod failing to load with "Path __zomtorio__/graphics/... does not match any enabled
+      mod". The published mod name is "Zomtorio" (capitalised), so its internal asset and require
+      paths must use the matching __Zomtorio__ prefix; they were lowercase. All paths corrected.
+    - Fixed contagion spreading sluggishly along belts - a belt carrying only a single item could
+      fail to infect the next belt (it seemed to need a second item). Belt item-presence is now
+      sampled on every sweep, so a lone item in transit is no longer missed.
+---------------------------------------------------------------------------------------------------
 Version: 2.0.0
 Date: 2026-06-26
   Major Features:

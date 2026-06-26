@@ -1,6 +1,6 @@
 -- S6 WHITE-BOX UNIT tests: the contagion spread ALGORITHM (R-CONT-1..7).
 --
--- IMPORTANT — what these are and are NOT. `require("__zomtorio__.lib.contagion")`
+-- IMPORTANT — what these are and are NOT. `require("__Zomtorio__.lib.contagion")`
 -- loads a SEPARATE private copy of the module into THIS (test) mod's Lua VM with
 -- its own `storage`; it is NOT the live mod's instance. So these tests drive
 -- contagion.on_tick / on_built / on_removed by hand and fake mover activity
@@ -16,8 +16,8 @@
 -- fast algorithm coverage, that one for real-play truth.
 
 local T         = require("harness.runner")
-local contagion = require("__zomtorio__.lib.contagion")
-local infection = require("__zomtorio__.lib.infection")
+local contagion = require("__Zomtorio__.lib.contagion")
+local infection = require("__Zomtorio__.lib.infection")
 
 local function reset()
   infection.reset_state()
@@ -129,6 +129,41 @@ T.test("a belt with items spreads downstream on a travel-time timer", {
     tick_contagion()
     t.assert.is_true(infection.is_infected(t.belts[2]),
       "downstream belt infected after the travel delay (R-CONT-2)")
+  end },
+})
+
+-- ------------------------------------------ transient single item (R-CONT-2 bug)
+-- PURPOSE: regression for the sluggish "a belt needs a SECOND item before it
+-- spreads" bug seen in play. A lone item rides all the way across an infected belt
+-- (a yellow belt tile is ~32 ticks) and is GONE by the time the travel-time timer
+-- fires. The fix samples presence on every sweep visit (not only when the timer is
+-- ready), so `last_active` records the transit and the belt still spreads within
+-- ACTIVE_WINDOW. Before the fix, presence was sampled only at spread_at, the lone
+-- item was missed, and belt2 was never infected (you had to feed a second item).
+-- This test deliberately does NOT re-stage the item, unlike the timer test above.
+T.test("a belt that briefly carried one item still spreads after it leaves (R-CONT-2)", {
+  function(t)
+    reset()
+    local o = t.test_origin
+    t.world.clear(t.surface, o)
+    t.belts = t.world.belt_line(t.surface, { x = o.x, y = o.y },
+                                defines.direction.east, 2, "transport-belt")
+    infection.infect(t.belts[1])
+    -- One item on belt1, then sweep ONCE before the travel delay: the per-visit
+    -- presence sample must record that belt1 is carrying (sets last_active).
+    t.world.belt_insert(t.belts[1], "iron-plate", 1)
+    tick_contagion()
+    t.assert.is_false(infection.is_infected(t.belts[2]),
+      "not spread before the travel delay")
+  end,
+  { after = 60, fn = function(t)
+    -- The lone item has now ridden off belt1 (no re-stage): belt1 reads EMPTY.
+    t.assert.equal(0, t.world.belt_count(t.belts[1], "iron-plate"),
+      "the single item has left belt1 (scenario precondition)")
+    tick_contagion()
+    -- Still spreads: the earlier transit was recorded within ACTIVE_WINDOW.
+    t.assert.is_true(infection.is_infected(t.belts[2]),
+      "belt with a transient single item still spreads downstream (R-CONT-2)")
   end },
 })
 

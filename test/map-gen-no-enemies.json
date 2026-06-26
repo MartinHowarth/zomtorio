@@ -1,0 +1,8 @@
+{
+  "_comment": "Map-gen settings for the test map: NO natural enemy bases. The mod cranks expansion/nests and worms attack the test player (only visible in the GUI client — the headless server has no player to kill), interrupting tests. Tests create their own enemies, so the world starts free of spawners/worms. Passed to `factorio --create --map-gen-settings`.",
+  "autoplace_controls": {
+    "enemy-base": { "frequency": 1, "size": 0, "richness": 1 }
+  },
+  "starting_area": 2,
+  "peaceful_mode": false
+}

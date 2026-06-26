@@ -1,0 +1,568 @@
+-- S4/S5 — infection of buildings, robots (R-INF) and the player/character (R-PINF).
+--
+-- A single hit from the infected force infects a non-wall target. Infected
+-- entities take damage over time (time-to-death at full health is the configured
+-- slider, R-INF-4) and, if they die from it, spawn zombies via the building-death
+-- path. Full repair clears the infection (R-INF-5).
+--
+-- DoT MODEL (elapsed-time). Each infected entity stores { entity, last_tick }.
+-- When processed we apply `max_health * (now - last_tick) / infection_ticks` as
+-- damage and advance last_tick. So cumulative damage over `infection_ticks`
+-- equals exactly max_health (death at full health in the configured time) no
+-- matter HOW OFTEN we actually process it — which is what lets processing be
+-- throttled (production) or sparse (tests) while timing stays exact.
+--
+-- The DoT is dealt on the ENEMY force with the "zomtorio-infection" damage type,
+-- so the eventual on_entity_died is enemy-caused and lib/spawning.lua handles the
+-- zombie spawn (R-INF-3) — this module never spawns directly. The custom type
+-- also lets the on-hit handler ignore our own DoT (it must not re-infect).
+--
+-- The set of infected entities lives in storage and is the source-of-truth
+-- contagion (lib/contagion.lua) reads in S6 when deciding what spreads.
+--
+-- PLAYER (CHARACTER) INFECTION (R-PINF). A bite — enemy-caused damage that dealt
+-- actual HEALTH damage (not fully shield-absorbed, R-PINF-3) — infects the
+-- character. We detect "real health damage" by comparing event.final_health to a
+-- per-tick snapshot of the character's health, NOT event.final_damage_amount
+-- (which is post-resistance only and so still > 0 behind a full shield). The
+-- player DoT is PER-TICK (few characters, no bucketing) and the
+-- module manages the character's health directly each tick: it sets an absolute
+-- health value along the DoT trajectory, which OVERWRITES passive regeneration
+-- (R-PINF-4). The last value we set is remembered as `floor_health`; if the
+-- character's health rises meaningfully ABOVE it, a real heal happened and the
+-- infection is cured (R-PINF-5). State is keyed on the CHARACTER ENTITY's
+-- unit_number (not a LuaPlayer) so the feature works headless with no connected
+-- players — the bite handler and DoT operate purely on character entities.
+
+local config  = require("lib.config")
+local planets = require("lib.planets")
+local util    = require("lib.util")
+
+local infection = {}
+
+-- Our own DoT damage type — recognised so it can't re-trigger infection.
+local INFECTION_DAMAGE_TYPE = "zomtorio-infection"
+
+-- Only an actual BITE infects the player (R-PINF-2): a biter's melee (physical) or
+-- a spitter/worm's acid projectile/splash. Fire, explosion, laser, etc. are NOT
+-- bites and must never infect even when enemy-attributed (e.g. a dying building's
+-- explosion or a lingering acid-vs-fire splash). Whitelist, not blacklist, so any
+-- unforeseen damage type defaults to "does not infect".
+local BITE_DAMAGE_TYPES = {
+  physical = true,  -- biter melee
+  acid = true,      -- spitter / worm projectile + acid splash
+}
+
+-- Aim to visit each infected entity roughly this often (ticks). The elapsed-time
+-- DoT keeps timing exact regardless, so this is purely a UPS-smoothing knob
+-- (R-CONT-7 spirit): spread the set's processing across this many ticks.
+local PROCESS_PERIOD = 30
+
+-- Hard ceiling on infected entities processed per tick, so a factory-sized
+-- infected set can never spike a single tick (R-CONT-7). Beyond ~MAX_SLICE*PERIOD
+-- infected entities, each is simply visited a little less often.
+local MAX_SLICE = 256
+
+-- A net health gain above this (HP) while infected counts as a real heal -> cure
+-- (R-PINF-5). Small enough to ignore float noise from setting absolute health.
+local HEAL_EPSILON = 0.5
+
+-- A bite counts as having dealt HEALTH damage only if the character's health
+-- dropped by more than this below the prior snapshot (R-PINF-3). Small enough to
+-- ignore float noise; large enough that a fully shield-absorbed bite (health
+-- unchanged) does not register.
+local DAMAGE_EPSILON = 0.001
+
+--------------------------------------------------------------------- storage
+-- storage.zomtorio.infection.infected : unit_number -> { entity = <LuaEntity>,
+--                                                         last_tick = <tick> }
+-- storage.zomtorio.infection.cursor   : saved next() key for round-robin sweep.
+-- storage.zomtorio.infection.immune   : unit_number -> <tick cured>. A repaired
+--   (cured) entity is briefly immune to re-infection so a cure can stick long enough
+--   to clear a region before its still-infected neighbours re-seed it (R-INF-5 was
+--   futile under active contagion otherwise). See repair-immunity below.
+
+local function state()
+  storage.zomtorio = storage.zomtorio or {}
+  local z = storage.zomtorio
+  z.infection = z.infection or {}
+  local inf = z.infection
+  inf.infected = inf.infected or {}
+  inf.cursor = inf.cursor or nil
+  inf.immune = inf.immune or {}
+  return inf
+end
+
+-- storage.zomtorio.player_infection : { records = (character unit_number -> {
+--   character = <LuaEntity>, floor_health = <number> }), health = (character
+--   unit_number -> <hp snapshot>) }.
+--
+-- `records` is the infected set, keyed on the character entity (not a LuaPlayer)
+-- so it works headless with no connected players. `floor_health` there is the
+-- health we last set along the DoT trajectory — the baseline for both regen-
+-- suppression and heal-detection.
+--
+-- `health` is a per-tick snapshot of EVERY character's current health (infected or
+-- not), used by the bite handler to detect a real health DROP. We can't use
+-- event.final_damage_amount for that: it is "damage after RESISTANCES", but a
+-- personal energy shield is an equipment layer applied AFTER resistances, so a
+-- fully shield-absorbed bite still reports final_damage_amount > 0 even though the
+-- character lost no health. event.final_health DOES reflect shield absorption, so
+-- comparing it against the prior snapshot is the shield-proof signal (R-PINF-3).
+local function player_state()
+  storage.zomtorio = storage.zomtorio or {}
+  local z = storage.zomtorio
+  z.player_infection = z.player_infection or {}
+  local ps = z.player_infection
+  ps.records = ps.records or {}
+  ps.health = ps.health or {}
+  return ps
+end
+
+-- Idempotent: only creates missing tables, never wipes live state — control.lua
+-- runs this on BOTH new game and on_configuration_changed, so a mod update must
+-- not orphan the infected set already present in an existing save.
+function infection.on_init()
+  state()
+  player_state()
+end
+
+--------------------------------------------------------------------- listeners
+-- Observers notified whenever the building path newly infects an entity. Used by
+-- contagion (S6) to seed its belt frontier when a belt becomes infected by ANY
+-- means. This is module-local Lua state (not storage): it is re-registered on
+-- every load because contagion.on_init runs on both new-game and config-changed.
+local infect_listeners = {}
+
+--- Register a function fn(entity) called after an entity is newly infected.
+--- Idempotent: registering the SAME fn twice is a no-op, so contagion.on_init
+--- running again on a config change does not double-register.
+function infection.add_infect_listener(fn)
+  for _, f in ipairs(infect_listeners) do
+    if f == fn then return end
+  end
+  infect_listeners[#infect_listeners + 1] = fn
+end
+
+--------------------------------------------------------------------- overrides
+-- Runtime-global settings can only be written by their owning mod, so the test
+-- harness (a separate mod) can't drive them; these single internal hooks let a
+-- test pin the setting / time-to-death deterministically. nil -> live setting.
+local enabled_override
+local player_enabled_override
+local ticks_override
+local immunity_override
+
+local function enabled()
+  if enabled_override ~= nil then return enabled_override end
+  return config.building_infection_enabled()
+end
+
+local function player_enabled()
+  if player_enabled_override ~= nil then return player_enabled_override end
+  return config.player_infection_enabled()
+end
+
+local function infection_ticks()
+  if ticks_override ~= nil then return ticks_override end
+  return config.infection_ticks()
+end
+
+--- Post-repair immunity window in ticks (0 disables). A just-cured entity can't be
+--- re-infected for this long, giving the player time to clear a region.
+local function immunity_ticks()
+  if immunity_override ~= nil then return immunity_override end
+  return config.repair_immunity_ticks()
+end
+
+--------------------------------------------------------------------- helpers
+
+--- The enemy (infected) force, or nil if it somehow doesn't exist.
+local function enemy_force()
+  return game.forces[util.ENEMY_FORCE]
+end
+
+--- Can this entity be infected at all? Valid, identifiable (unit_number),
+--- destructible, not on the enemy force, and not an excluded type (walls/gates
+--- per R-INF-2/R-DEATH-3; characters are S5; units are zombies themselves).
+local function is_infectable(entity)
+  if not (entity and entity.valid) then return false end
+  if not entity.unit_number then return false end
+  if util.is_enemy_force(entity.force) then return false end
+  local t = entity.type
+  if t == "wall" or t == "gate" or t == "character" or t == "unit" then return false end
+  if (entity.max_health or 0) <= 0 then return false end
+  return true
+end
+
+--------------------------------------------------------------------- alt marker
+-- A red biohazard warning triangle drawn over an infected building, ONLY in
+-- alt-mode (like the frozen/no-power status icons), with no effect on operation.
+-- The render is bound to the target entity, so the engine auto-destroys it when
+-- the entity dies/is mined; we only destroy it ourselves on a cure.
+
+--- Create the alt-mode biohazard marker over `entity`; returns the render object.
+local function make_marker(entity)
+  return rendering.draw_sprite {
+    sprite = "zomtorio-biohazard",
+    target = { entity = entity, offset = { 0, -0.25 } },
+    surface = entity.surface,
+    only_in_alt_mode = true,
+    render_layer = "entity-info-icon",
+    x_scale = 0.5,
+    y_scale = 0.5,
+  }
+end
+
+--- Create the biohazard marker over an infected CHARACTER. Unlike the building
+--- marker this is ALWAYS visible (only_in_alt_mode = false): the player must see at
+--- a glance that they're infected without holding Alt (R-PINF visual). Drawn a little
+--- higher so it sits above the character.
+local function make_player_marker(character)
+  return rendering.draw_sprite {
+    sprite = "zomtorio-biohazard",
+    target = { entity = character, offset = { 0, -2.2 } },
+    surface = character.surface,
+    only_in_alt_mode = false,
+    render_layer = "entity-info-icon",
+    x_scale = 0.6,
+    y_scale = 0.6,
+  }
+end
+
+--- Destroy an infected record's marker if it still exists. Safe to call from any
+--- removal path; a marker whose entity already died is auto-destroyed by the
+--- engine, so this just clears our reference.
+local function destroy_marker(rec)
+  local m = rec.marker
+  if m and m.valid then m.destroy() end
+  rec.marker = nil
+end
+
+--- Apply elapsed-time DoT to one infected record. Returns false if the record
+--- should be dropped (invalid / cured / it died), true if it remains infected.
+local function process(rec, now)
+  local e = rec.entity
+  if not (e and e.valid) then destroy_marker(rec); return false end
+
+  -- Cure check BEFORE damage: a fully-repaired entity clears (R-INF-5). This must
+  -- precede the DoT, else repair-to-max would never be observed (we'd re-damage
+  -- it on the same visit). The infecting seed (see infect()) guarantees a freshly
+  -- infected entity is below max, so this can't cure it spuriously. On cure, stamp a
+  -- post-repair immunity so neighbours can't instantly re-infect it (see infect()).
+  if e.get_health_ratio() >= 1 then
+    if immunity_ticks() > 0 then state().immune[e.unit_number] = now end
+    destroy_marker(rec)
+    return false
+  end
+
+  local ticks = infection_ticks()
+  if ticks and ticks > 0 then
+    local dt = now - rec.last_tick
+    if dt > 0 then
+      local dmg = e.max_health * dt / ticks
+      rec.last_tick = now
+      e.damage(dmg, enemy_force(), INFECTION_DAMAGE_TYPE)
+      -- damage() may have killed it; the resulting on_entity_died (enemy-caused)
+      -- drives the spawn elsewhere. Drop our record either way (the marker is
+      -- entity-bound, so the engine already destroyed it with the entity).
+      if not e.valid then destroy_marker(rec); return false end
+    end
+  end
+  return true
+end
+
+--------------------------------------------------------------------- public
+
+--- Infect an entity now (public — also called by contagion in S6). Idempotent:
+--- already-infected or non-infectable entities are no-ops. Applies one tiny seed
+--- of DoT so health drops just below max, so the repair-cure check can't fire on
+--- a freshly-infecting hit that the engine fully resisted.
+function infection.infect(entity)
+  if not is_infectable(entity) then return end
+  local inf = state()
+  local un = entity.unit_number
+  if inf.infected[un] then return end  -- idempotent
+
+  -- Post-repair immunity (R-INF-5 follow-up): a recently-cured entity can't be
+  -- re-infected for a window, so repairing a region isn't undone the instant a
+  -- still-infected neighbour is swept. Expired stamps are pruned on contact.
+  local cured = inf.immune[un]
+  if cured then
+    local window = immunity_ticks()
+    if window > 0 and game.tick - cured < window then return end
+    inf.immune[un] = nil
+  end
+
+  local now = game.tick
+  local rec = { entity = entity, last_tick = now }
+  inf.infected[un] = rec
+
+  -- Alt-mode biohazard marker over the infected building (R-visual; no effect on
+  -- operation). Bound to the entity so it auto-clears on death/mining.
+  rec.marker = make_marker(entity)
+
+  -- Seed: nudge health just below max so a fully-healthy infected entity is
+  -- never mistaken for "fully repaired" on its first process.
+  if entity.get_health_ratio() >= 1 then
+    entity.damage(1, enemy_force(), INFECTION_DAMAGE_TYPE)
+  end
+
+  -- Notify observers (contagion seeds its belt frontier from this).
+  for _, fn in ipairs(infect_listeners) do
+    fn(entity)
+  end
+end
+
+--- Is this entity currently infected? (Read by contagion.)
+function infection.is_infected(entity)
+  if not (entity and entity.valid and entity.unit_number) then return false end
+  return state().infected[entity.unit_number] ~= nil
+end
+
+--- Is this character currently player-infected (R-PINF)?
+function infection.is_player_infected(character)
+  if not (character and character.valid and character.unit_number) then return false end
+  return player_state().records[character.unit_number] ~= nil
+end
+
+--- True if this damage event was caused by the enemy (infected) force: either the
+--- damaging force IS the enemy force, or the (valid) cause entity is on it.
+local function is_enemy_caused(event)
+  if util.is_enemy_force(event.force) then return true end
+  local cause = event.cause
+  return cause and cause.valid and util.is_enemy_force(cause.force) or false
+end
+
+--- Mark a character infected now (R-PINF-2). Idempotent; baseline `floor_health`
+--- is the character's current (post-bite) health.
+local function infect_character(character)
+  local ps = player_state()
+  local un = character.unit_number
+  if ps.records[un] then return end  -- idempotent
+  ps.records[un] = {
+    character = character,
+    floor_health = character.health,
+    -- Always-on biohazard marker so the player sees the infection without Alt.
+    marker = make_player_marker(character),
+  }
+end
+
+--- Player (character) bite path of on_entity_damaged. Caller guarantees the
+--- self-DoT early-out and planets guard already ran.
+local function on_character_damaged(event)
+  local entity = event.entity
+  local un = entity.unit_number
+  local ps = player_state()
+
+  -- Determine the health BEFORE this hit from our snapshot (fall back to max if
+  -- this character hasn't been snapshotted yet), then refresh the snapshot to the
+  -- post-hit health. We update the snapshot on EVERY character damage event —
+  -- enemy or not, before any gate — so the baseline stays accurate when several
+  -- hits land in one tick (e.g. a non-bite hit then a shielded bite).
+  local pre = ps.health[un] or entity.max_health
+  if event.final_health ~= nil then ps.health[un] = event.final_health end
+
+  if not player_enabled() then return end  -- R-PINF-1
+  -- A valid character not on the enemy force (zombies are units, not characters;
+  -- but never infect an enemy-force character defensively).
+  if util.is_enemy_force(entity.force) then return end
+  if not is_enemy_caused(event) then return end
+  -- Only a bite infects (R-PINF-2): fire/explosion/etc. damage does not, even when
+  -- enemy-attributed. event.damage_type can be nil for scripted damage; treat that
+  -- as non-bite.
+  if not (event.damage_type and BITE_DAMAGE_TYPES[event.damage_type.name]) then return end
+
+  -- Health-damage signal (R-PINF-3): the hit actually reduced HEALTH. We do NOT
+  -- use event.final_damage_amount — that is damage after RESISTANCES only, and a
+  -- personal energy shield (an equipment layer applied AFTER resistances) can
+  -- absorb a bite entirely while final_damage_amount still reports > 0. Instead we
+  -- require the post-hit health (event.final_health, which DOES reflect shield
+  -- absorption) to be below the prior snapshot: a fully shield-absorbed bite
+  -- leaves final_health == pre, so it does not infect.
+  if event.final_health == nil then return end
+  if not (event.final_health < pre - DAMAGE_EPSILON) then return end
+
+  infect_character(entity)
+end
+
+--- Infect-on-hit. Dispatches by entity type: characters take the player path
+--- (R-PINF), everything else the building path (R-INF).
+function infection.on_entity_damaged(event)
+  -- Never let our own DoT re-trigger infection (applies to BOTH paths).
+  if event.damage_type and event.damage_type.name == INFECTION_DAMAGE_TYPE then return end
+
+  local entity = event.entity
+  if not (entity and entity.valid) then return end
+  if not planets.is_active(entity.surface) then return end  -- R-SCOPE-1
+
+  if entity.type == "character" then
+    on_character_damaged(event)
+    return
+  end
+
+  -- Building path (R-INF).
+  if not enabled() then return end  -- R-INF-1
+  if not is_enemy_caused(event) then return end
+  if not is_infectable(entity) then return end  -- R-INF-2/6
+  infection.infect(entity)
+end
+
+--- Throttled round-robin sweep (R-CONT-7 spirit). Process a slice of the
+--- infected set each tick, sized so each entity is visited ~every PROCESS_PERIOD
+--- ticks (with one infected, that's every tick). The elapsed-time DoT keeps
+--- timing exact whatever the slice size.
+--- Per-tick player DoT (R-PINF-2/4/5). Few characters, so no bucketing: process
+--- every infected character every tick. For each record:
+---   1. invalid character    -> drop.
+---   2. health rose > floor+EPSILON (a real heal) -> CURE: drop, leave it alone.
+---   3. otherwise apply one tick of DoT off the floor (discarding any passive
+---      regen above it -> regen-suppression), setting absolute health. If that
+---      would kill it, .die(); else record the new floor.
+local function process_players(now)
+  local ps = player_state()
+
+  -- Refresh the health snapshot for every character on every active surface so the
+  -- bite handler's "did health drop?" baseline stays current across healing and
+  -- passive regen (which fire NO damage event). Characters are few, so this scan is
+  -- cheap. The snapshot table is rebuilt each tick to drop departed characters.
+  local snap = {}
+  for _, surface in pairs(game.surfaces) do
+    if planets.is_active(surface) then  -- R-SCOPE-1
+      for _, c in pairs(surface.find_entities_filtered { type = "character" }) do
+        if c.valid and c.unit_number then snap[c.unit_number] = c.health end
+      end
+    end
+  end
+  ps.health = snap
+
+  for un, rec in pairs(ps.records) do
+    local c = rec.character
+    if not (c and c.valid) then
+      destroy_marker(rec)
+      ps.records[un] = nil
+    elseif c.health > rec.floor_health + HEAL_EPSILON then
+      destroy_marker(rec)
+      ps.records[un] = nil  -- net heal -> cure (R-PINF-5); leave the character healed
+    else
+      local ticks = infection_ticks()
+      if ticks and ticks > 0 then
+        -- Base off the lower of current/floor: passive regen above the floor is
+        -- discarded (R-PINF-4); external extra damage below it is respected.
+        local base = math.min(c.health, rec.floor_health)
+        local dot = c.max_health / ticks
+        local new = base - dot
+        if new <= 0 then
+          destroy_marker(rec)
+          c.die(enemy_force())  -- killed by the infection (attributed to the enemy)
+          ps.records[un] = nil
+        else
+          c.health = new
+          rec.floor_health = new
+          -- Keep the snapshot in lockstep with the health we just set, so an
+          -- incoming bite this/next tick compares against the DoT trajectory and
+          -- not a stale pre-DoT value.
+          ps.health[un] = new
+        end
+      end
+    end
+  end
+end
+
+function infection.on_tick(event)
+  local now_p = (event and event.tick) or game.tick
+  process_players(now_p)
+
+  local inf = state()
+  local infected = inf.infected
+
+  -- O(1) set size (Factorio engine-tracked) — under R-CONT-5 the infected set can
+  -- grow to the whole factory, so a per-tick pairs() scan would itself be O(n) and
+  -- defeat the throttle (R-CONT-7).
+  local count = table_size(infected)
+  if count == 0 then return end
+
+  -- Visit ~1/PROCESS_PERIOD of the set per tick, but HARD-CAP the slice so per-tick
+  -- work is bounded no matter how large the set grows (R-CONT-7). The elapsed-time
+  -- DoT keeps death timing exact even when a huge set is visited less often.
+  local now = (event and event.tick) or game.tick
+  local slice = math.min(MAX_SLICE, math.ceil(count / PROCESS_PERIOD))
+
+  local key = inf.cursor
+  for _ = 1, slice do
+    -- Resume the round-robin; wrap to the start when we run off the end.
+    local un, rec = next(infected, key)
+    if un == nil then
+      un, rec = next(infected, nil)
+      if un == nil then break end  -- emptied mid-sweep
+    end
+    key = un
+    if not process(rec, now) then
+      -- Advance the cursor PAST the entry we're about to remove, so the removal
+      -- doesn't strand next()'s key.
+      key = next(infected, un)
+      infected[un] = nil
+    end
+  end
+  inf.cursor = key
+end
+
+--------------------------------------------------------------------- test API
+
+--- Test-only: pin (or, with nil, release) the building-infection enabled flag.
+function infection.set_enabled_override(v)
+  enabled_override = v
+end
+
+--- Test-only: pin (or, with nil, release) the player-infection enabled flag.
+function infection.set_player_enabled_override(v)
+  player_enabled_override = v
+end
+
+--- Test-only: pin (or, with nil, release) the time-to-death in ticks.
+function infection.set_ticks_override(n)
+  ticks_override = n
+end
+
+--- Test-only: pin (or, with nil, release) the post-repair immunity window in ticks.
+function infection.set_immunity_override(n)
+  immunity_override = n
+end
+
+--- Test-only: hard-reset all bookkeeping. Production on_init is intentionally
+--- idempotent (preserves live state across a config change), so tests that need
+--- a clean slate between cases call this instead.
+function infection.reset_state()
+  storage.zomtorio = storage.zomtorio or {}
+  -- Destroy any live alt-mode markers before dropping their records.
+  local inf = storage.zomtorio.infection
+  if inf and inf.infected then
+    for _, rec in pairs(inf.infected) do destroy_marker(rec) end
+  end
+  storage.zomtorio.infection = { infected = {}, cursor = nil, immune = {} }
+  storage.zomtorio.player_infection = { records = {}, health = {} }
+end
+
+--- Debug/test accessor: number of currently-infected buildings (real mod state).
+function infection.debug_infected_count()
+  return table_size(state().infected)
+end
+
+--- Test helper: does this entity's infected record have a live alt-mode marker?
+function infection.has_marker(entity)
+  if not (entity and entity.valid and entity.unit_number) then return false end
+  local rec = state().infected[entity.unit_number]
+  return rec ~= nil and rec.marker ~= nil and rec.marker.valid
+end
+
+--- Test helper: the only_in_alt_mode flag of an infected CHARACTER's marker, or nil
+--- if there's no live marker. Used to defend that the player infection icon shows
+--- WITHOUT alt-mode (it must be false), unlike the building marker.
+function infection.player_marker_alt_mode(character)
+  if not (character and character.valid and character.unit_number) then return nil end
+  local rec = player_state().records[character.unit_number]
+  if not (rec and rec.marker and rec.marker.valid) then return nil end
+  return rec.marker.only_in_alt_mode
+end
+
+return infection

@@ -1,11 +1,15 @@
 {
     "name": "Zomtorio",
-    "version": "0.1.1",
+    "version": "2.0.1",
     "title": "Zomtorio",
     "author": "Martin Howarth",
     "contact": "",
     "homepage": "https://github.com/MartinHowarth/zomtorio",
-    "factorio_version": "1.1",
-    "dependencies": ["base >= 0.17"],
-    "description": "Biters act like zombies."
+    "factorio_version": "2.1",
+    "dependencies": [
+        "base >= 2.0",
+        "space-age >= 2.0",
+        "? quality"
+    ],
+    "description": "Turns Factorio's biters into an overwhelming zombie horde. Buildings destroyed by the horde become sources of new zombies; infection spreads through your factory along the flow of goods; corpses reanimate. Requires Space Age."
 }

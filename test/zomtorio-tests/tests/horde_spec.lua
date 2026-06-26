@@ -141,30 +141,109 @@ T.test("force_event starts a horde now and survives daylight (debug trigger)", f
   t.assert.is_true(horde.get_state().active, "forced horde persists through daylight")
 end)
 
------------------------------------------------------- horde comes from one direction
+------------------------------------------------------ horde targets the factory
 
--- A horde appears from ONE direction, ~10 chunks beyond the factory edge (the
--- furthest player building), rather than ringing the player (R-GEN-5 follow-up).
-T.test("a forced horde spawns from one direction, ~10 chunks beyond the factory", {
+-- DEFENDS the sandbox/no-player bug: the horde used to anchor on a player CHARACTER,
+-- so with no player present `/zomtorio-horde` chose no origin and spawned NOTHING.
+-- Now it targets the FACTORY (player buildings) — origin is ~10 chunks beyond the
+-- factory edge and it spawns even with no character. (factory_override pins a
+-- deterministic factory so the test doesn't depend on stray entities on the shared
+-- surface; chunks at the far origin are force-generated so placement can succeed.)
+T.test("a horde targets the factory and spawns with NO player present (sandbox)", {
   function(t)
-    horde.reset_state()
+    reset(t)
+    horde.set_factory_override {
+      center = { x = t.test_origin.x, y = t.test_origin.y },
+      radius = 50,
+      buildings = {
+        { x = t.test_origin.x + 50, y = t.test_origin.y },
+        { x = t.test_origin.x - 50, y = t.test_origin.y },
+      },
+    }
     horde.set_overrides { enabled = true }
-    t.world.clear(t.surface, t.test_origin, 48)
-    t.world.place(t.surface, "character", t.test_origin, { force = "player" })
-    -- a building 20 tiles out stands in for the factory edge
-    t.world.place(t.surface, "stone-wall",
-      { x = t.test_origin.x + 20, y = t.test_origin.y }, { force = "player" })
+    horde.set_evolution_override(0.3)
+    swarm.set_cap_override(10000)          -- spawns become countable individuals
+    t.before = swarm.active_count()
+    horde.force_event(1)                   -- NO character placed anywhere
+  end,
+  { after = 1, fn = function(t)
+    local st = horde.get_state()
+    t.assert.not_nil(st.origin, "an origin was chosen from the factory (no player needed)")
+    local c = st.factory_center
+    local d = math.sqrt((st.origin.x - c.x) ^ 2 + (st.origin.y - c.y) ^ 2)
+    -- origin sits radius (50) + 10 chunks (320) = ~370 from the factory centre.
+    -- at_least(min, actual) asserts actual >= min; flip args for the upper bound.
+    t.assert.at_least(369, d, "origin is >= ~radius+10 chunks from the factory centre")
+    t.assert.at_least(d, 371, "origin is <= ~radius+10 chunks from the factory centre")
+
+    -- Force-generate the far origin's chunks, then drive one burst and confirm it
+    -- actually SPAWNED (the bug was: nothing spawned with no player).
+    local o = st.origin
+    t.surface.request_to_generate_chunks(o, 2)
+    t.surface.force_generate_chunk_requests()
+    local pe = st.period_end_tick
+    local tk = pe - (pe % 60) - 60         -- a burst tick safely inside the window
+    horde.on_tick { tick = tk }
+    t.assert.is_true(swarm.active_count() > t.before,
+      string.format("a horde spawns with no player (before=%d after=%d)",
+        t.before, swarm.active_count()))
+  end },
+})
+
+------------------------------------------------------ marches on the nearest edge
+
+-- DEFENDS: the horde marches on the part of the factory CLOSEST to where it spawned
+-- (its nearest edge), not the player and not an arbitrary point.
+T.test("a horde marches on the factory building nearest its spawn point", {
+  function(t)
+    reset(t)
+    horde.set_factory_override {
+      center = { x = 0, y = 0 }, radius = 100,
+      buildings = { { x = 100, y = 0 }, { x = -100, y = 0 } },
+    }
+    horde.set_overrides { enabled = true }
+    horde.set_evolution_override(0.0)
     horde.force_event(1)
   end,
   { after = 1, fn = function(t)
     local st = horde.get_state()
-    t.assert.not_nil(st.origin, "a single horde origin was chosen")
-    local dx = st.origin.x - t.test_origin.x
-    local dy = st.origin.y - t.test_origin.y
-    local d = math.sqrt(dx * dx + dy * dy)
-    -- furthest building (~20) + 10 chunks (320) = ~340; lower-bounded for slack
-    -- (stray player entities from other cases only push it further out).
-    t.assert.at_least(320, d, "origin is at least ~10 chunks beyond the player")
+    t.assert.not_nil(st.target, "a march target was chosen")
+    local function d2(a, b) return (a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 end
+    local b1, b2 = { x = 100, y = 0 }, { x = -100, y = 0 }
+    local nearest = (d2(st.origin, b1) <= d2(st.origin, b2)) and b1 or b2
+    t.assert.equal(nearest.x, st.target.x, "target is the building nearest the spawn origin")
+    t.assert.equal(nearest.y, st.target.y, "target is the building nearest the spawn origin")
+  end },
+})
+
+------------------------------------------------------ persistent counted warning
+
+-- DEFENDS the warning rework: a persistent map marker tracks the live horde count
+-- and only RETIRES once the horde thins below 25 (so it sticks around for the whole
+-- assault, not just the spawning window, and stragglers/ambient can't keep it up
+-- forever). Driven at a controlled, generated location via start_warning_at so the
+-- count/centroid/auto-clear logic is exercised independent of the far spawn origin.
+T.test("the horde warning tracks the live count and retires below 25", {
+  function(t)
+    reset(t)
+    t.world.clear(t.surface, t.test_origin, 80)   -- > WARNING_SCAN_RADIUS, so the scan is clean
+    horde.start_warning_at(t.test_origin, 100)
+    -- a live horde of 30 at the warning centroid
+    for i = 1, 30 do
+      t.world.place(t.surface, "small-biter",
+        { x = t.test_origin.x + (i % 6), y = t.test_origin.y + math.floor(i / 6) },
+        { force = "enemy" })
+    end
+    horde.update_warning_now()
+    local w = horde.get_state().warning
+    t.assert.not_nil(w, "warning stays up while a live horde (>=25) is present")
+    t.assert.at_least(25, w.count, "the marker count reflects the live horde")
+  end,
+  { after = 1, fn = function(t)
+    t.world.clear(t.surface, t.test_origin, 80)    -- horde wiped out
+    horde.update_warning_now()
+    t.assert.equal(nil, horde.get_state().warning,
+      "the warning retires once the horde thins below 25")
   end },
 })
 

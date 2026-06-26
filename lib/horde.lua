@@ -128,14 +128,27 @@ local NIGHT_BURST_CAP    = 60
 local SPAWN_RING_MIN = 40
 local SPAWN_RING_MAX = 60
 
--- A swarm EVENT (R-GEN-5) instead comes from ONE direction: it appears on the
--- horizon ~HORDE_OFFSET tiles beyond the furthest factory building (10 chunks) in a
--- per-event random direction, then marches in. FACTORY_SCAN_RADIUS bounds the
--- one-off scan that finds that factory edge.
+-- A horde EVENT (R-GEN-5) comes from ONE direction: it appears on the horizon
+-- ~HORDE_OFFSET tiles beyond the factory edge (10 chunks) in a per-event random
+-- direction, then marches on the NEAREST part of the factory. The spawn point and
+-- march target are derived from the FACTORY (player-force buildings), never from a
+-- player character, so a horde works even in sandbox/editor with no player.
 local HORDE_OFFSET = 10 * 32        -- 10 chunks past the factory edge
-local FACTORY_SCAN_RADIUS = 1500    -- how far out to look for the factory edge
--- Small spread of each burst around the swarm's spawn point (a tight incoming mass).
+-- Small spread of each burst around the horde's spawn point (a tight incoming mass).
 local HORDE_SPAWN_JITTER = 6
+
+-- Persistent on-map warning: a chart tag labelled with the live remaining horde
+-- count, re-centred on the horde's centroid ~once a second. It lives from event
+-- start (independent of when spawning ends) until the tracked count thins below
+-- WARNING_MIN_COUNT (so stragglers / ambient enemies near the centroid can't keep
+-- it up forever). WARNING_SCAN_RADIUS bounds the per-update count/centroid scan.
+local WARNING_SCAN_RADIUS = 64
+local WARNING_MIN_COUNT   = 25
+
+-- Test hook: inject a deterministic factory reference so headless tests don't depend
+-- on whatever player entities happen to be on the shared surface. nil in normal play
+-- => the live scan. Shape: { center = {x,y}, radius = n, buildings = { {x,y}, ... } }.
+local factory_override = nil
 
 --------------------------------------------------------------------- overrides
 -- Runtime-global settings can only be written by their owning mod, so the test
@@ -268,47 +281,60 @@ local function swarm_tier(e)
   return "small"
 end
 
------------------------------------------------- directional swarm (R-GEN-5)
+------------------------------------------------ directional horde (R-GEN-5)
 
---- The first player character on the surface (the swarm's direction anchor and
---- march target). nil headless / when no player is present.
-local function first_character(surface)
-  local chars = surface.find_entities_filtered { type = "character" }
-  for _, c in pairs(chars) do
-    if c.valid then return c end
+--- The factory reference: the CENTRE (centroid of player-force buildings), the
+--- RADIUS (furthest building from that centre), and the list of building POSITIONS.
+--- Computed from buildings, NOT a player character, so the horde targets the base
+--- and works with no player present (sandbox/editor). Scanned once per event (events
+--- are days apart). Falls back to the player force's spawn position when the base
+--- has no buildings yet. A test override (factory_override) bypasses the scan.
+local function factory_reference(surface)
+  if factory_override then
+    return factory_override.center, factory_override.radius or 0,
+           factory_override.buildings or {}
   end
-  return nil
-end
-
---- Distance from `center` to the furthest player-force BUILDING within
---- FACTORY_SCAN_RADIUS — i.e. the factory's edge in any direction. 0 if none.
---- Scanned once per event (events are days apart), never per tick.
-local function furthest_building(surface, center)
-  local maxd = 0
-  local ents = surface.find_entities_filtered {
-    force = "player", position = center, radius = FACTORY_SCAN_RADIUS,
-  }
-  for _, e in pairs(ents) do
+  local positions = {}
+  local sx, sy, n = 0, 0, 0
+  for _, e in pairs(surface.find_entities_filtered { force = "player" }) do
     if e.valid and e.type ~= "character" then
-      local dx, dy = e.position.x - center.x, e.position.y - center.y
-      local d = math.sqrt(dx * dx + dy * dy)
-      if d > maxd then maxd = d end
+      local p = e.position
+      positions[#positions + 1] = { x = p.x, y = p.y }
+      sx = sx + p.x; sy = sy + p.y; n = n + 1
     end
   end
-  return maxd
+  local center
+  if n > 0 then
+    center = { x = sx / n, y = sy / n }
+  else
+    local pf = game.forces and game.forces["player"]
+    local ok, sp = pcall(function() return pf.get_spawn_position(surface) end)
+    center = (ok and sp) and { x = sp.x, y = sp.y } or { x = 0, y = 0 }
+  end
+  local radius = 0
+  for _, p in ipairs(positions) do
+    local dx, dy = p.x - center.x, p.y - center.y
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d > radius then radius = d end
+  end
+  return center, radius, positions
 end
 
---- The swarm spawn point: a per-event pseudo-random direction (seeded by tick, as
---- Math.random is unavailable), HORDE_OFFSET tiles beyond the factory edge.
-local function compute_origin(surface, anchor, tick)
-  local angle = (tick * 2.3999632) % (2 * math.pi)   -- varies per event
-  local dist = furthest_building(surface, anchor) + HORDE_OFFSET
-  return { x = anchor.x + math.cos(angle) * dist, y = anchor.y + math.sin(angle) * dist }
+--- The building position CLOSEST to `origin` — the nearest edge of the base, which
+--- the horde marches on. Falls back to `center` when there are no buildings.
+local function nearest_building(buildings, origin, center)
+  local best, bestd
+  for _, p in ipairs(buildings) do
+    local dx, dy = p.x - origin.x, p.y - origin.y
+    local d = dx * dx + dy * dy
+    if not bestd or d < bestd then bestd = d; best = p end
+  end
+  return best or { x = center.x, y = center.y }
 end
 
---- An attack-march command that drives the horde from its spawn point to the
---- factory, fighting anything in the way (so it "advances" rather than idling
---- out of player-scent range).
+--- An attack-march command that drives the horde from its spawn point onto the
+--- factory, fighting anything in the way (so it "advances" rather than idling out
+--- of player-scent range). Targets a FACTORY point, never a player.
 local function march_command(target)
   return {
     type = defines.command.attack_area,
@@ -318,83 +344,132 @@ local function march_command(target)
   }
 end
 
---- Remove the on-map swarm warning marker, if any.
-local function clear_marker(s)
-  if s.marker and s.marker.valid then pcall(function() s.marker.destroy() end) end
-  s.marker = nil
-end
-
---- Place (or move) the on-map warning marker at `pos` for the PLAYER force, so it
---- shows on players' maps. Chart the area first so the incoming swarm is visible on
---- the map ("appears on the horizon"). All pcall-guarded: a missing player force or
---- an uncharted-area refusal degrades to no marker (the gps message still warns).
-local function set_marker(surface, s, pos)
-  clear_marker(s)
-  local pf = game.forces and game.forces["player"]
-  if not pf then return end
-  pcall(function()
-    pf.chart(surface, {
-      { pos.x - 32, pos.y - 32 }, { pos.x + 32, pos.y + 32 },
-    })
-  end)
-  local ok, tag = pcall(function()
-    return pf.add_chart_tag(surface, { position = pos, text = "Horde" })
-  end)
-  if ok then s.marker = tag end
-end
-
---- Spawn one burst of the swarm from its single spawn point (with a little jitter),
---- commanded to march on the factory. No-op if no origin was chosen (no player).
+--- Spawn one burst of the horde from its single spawn point (with a little jitter),
+--- commanded to march on the nearest factory edge. No-op if no origin (shouldn't
+--- happen — begin_active always sets one now).
 local function spawn_horde(surface, s, count, tier, tick)
   if count <= 0 or not s.origin then return end
   local jx = ((tick * 0.31) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
   local jy = ((tick * 0.53) % (2 * HORDE_SPAWN_JITTER)) - HORDE_SPAWN_JITTER
   local pos = { x = s.origin.x + jx, y = s.origin.y + jy }
-  local cmd = s.anchor and march_command(s.anchor) or nil
+  local cmd = s.target and march_command(s.target) or nil
   swarm.spawn(surface, pos, count, tier, util.ENEMY_FORCE, cmd)
 end
 
---- Move the warning marker partway from the spawn point toward the factory as the
---- event runs, so it "travels with" the advancing swarm (capped at 70% in so it
---- still reads as incoming).
-local function update_marker(surface, s, tick)
-  if not (s.origin and s.anchor and s.active_start and s.period_end_tick) then return end
-  local span = s.period_end_tick - s.active_start
-  local frac = span > 0 and (tick - s.active_start) / span or 0
-  frac = clamp(frac, 0, 1) * 0.7
-  s.marker_pos = {
-    x = s.origin.x + (s.anchor.x - s.origin.x) * frac,
-    y = s.origin.y + (s.anchor.y - s.origin.y) * frac,
-  }
-  set_marker(surface, s, s.marker_pos)
+--------------------------------------------------- persistent horde warning
+
+--- Destroy the warning's map marker and drop the warning state.
+local function clear_warning(s)
+  local w = s.warning
+  if w and w.marker and w.marker.valid then pcall(function() w.marker.destroy() end) end
+  s.warning = nil
 end
 
---- Begin a swarm: pick the single spawn point + march target, drop the on-map
---- warning marker, and announce it. `forced` (the /zomtorio-swarm debug trigger)
---- makes it ignore the dawn end for its window.
+--- Place (or move) the warning marker at `pos` for the PLAYER force, labelled with
+--- the live count, so it shows on players' maps. Chart the area first so an incoming
+--- horde on the horizon is visible. All pcall-guarded (missing force / uncharted
+--- area degrade to no marker; the gps chat warning still fired at start).
+local function place_warning_marker(surface, w, pos)
+  if w.marker and w.marker.valid then pcall(function() w.marker.destroy() end) end
+  w.marker = nil
+  local pf = game.forces and game.forces["player"]
+  if not pf then return end
+  pcall(function()
+    pf.chart(surface, { { pos.x - 32, pos.y - 32 }, { pos.x + 32, pos.y + 32 } })
+  end)
+  local ok, tag = pcall(function()
+    return pf.add_chart_tag(surface, { position = pos, text = "Horde: " .. (w.count or 0) })
+  end)
+  if ok then w.marker = tag end
+end
+
+--- Start tracking a horde with the warning: seed it at the spawn origin with an
+--- estimated incoming size and place the marker.
+local function start_warning(surface, s, origin, est)
+  clear_warning(s)
+  s.warning = { centroid = { x = origin.x, y = origin.y }, count = est, est = est }
+  place_warning_marker(surface, s.warning, s.warning.centroid)
+end
+
+--- Count the live horde near the current centroid and re-average its position:
+--- swarm CLUSTERS contribute their full population (swarm.pop_of), loose enemies 1
+--- each. Approximate (may sweep in some ambient enemies near the centroid) — the
+--- <WARNING_MIN_COUNT cutoff stops that keeping the marker up forever.
+local function scan_horde(surface, centroid)
+  local found = surface.find_entities_filtered {
+    type = "unit", force = util.ENEMY_FORCE, position = centroid, radius = WARNING_SCAN_RADIUS,
+  }
+  local count, sx, sy = 0, 0, 0
+  for _, u in pairs(found) do
+    if u.valid then
+      local c = swarm.pop_of(u) or 1
+      count = count + c
+      sx = sx + u.position.x * c; sy = sy + u.position.y * c
+    end
+  end
+  local new_centroid = count > 0 and { x = sx / count, y = sy / count } or centroid
+  return count, new_centroid
+end
+
+--- Drive the persistent warning (~once a second from on_tick), INDEPENDENT of
+--- whether spawning is still happening: re-count + re-centre the marker. While the
+--- event is still SPAWNING (s.active) the marker never reads as thinned (the live
+--- count dips between bursts); once spawning has ended it tracks the real remaining
+--- count and retires the marker when the horde drops below WARNING_MIN_COUNT.
+local function update_warning(surface, s)
+  local w = s.warning
+  if not w then return end
+  local count, centroid = scan_horde(surface, w.centroid)
+  if count > 0 then w.centroid = centroid end
+  if s.active then
+    w.count = math.max(count, w.est or count)
+  else
+    w.count = count
+    if count < WARNING_MIN_COUNT then clear_warning(s); return end
+  end
+  place_warning_marker(surface, w, w.centroid)
+end
+
+--- Estimate the incoming horde size (for the chat warning): per-burst count times
+--- the number of bursts over the spawning period.
+local function estimate_size(e, dur)
+  local per_burst = clamp(math.floor(SWARM_BURST_BASE * opt_intensity() * (1 + 2 * e)), 1, SWARM_BURST_CAP)
+  local bursts = math.max(1, math.floor(dur / BURST_PERIOD))
+  return per_burst * bursts
+end
+
+--- Begin a horde: derive the spawn point + march target from the FACTORY (not a
+--- player — works in sandbox), announce the incoming size with a map ping, and start
+--- the persistent warning. `forced` (the /zomtorio-horde trigger) ignores the dawn
+--- end for its window.
 local function begin_active(s, surface, tick, dur, forced)
   s.active = true
   s.active_start = tick
   s.period_end_tick = tick + dur
   s.forced_until = forced and (tick + dur) or nil
   s.warned = true
-  s.origin, s.anchor, s.marker_pos = nil, nil, nil
-  local char = first_character(surface)
-  if char then
-    s.anchor = { x = char.position.x, y = char.position.y }
-    s.origin = compute_origin(surface, s.anchor, tick)
-    s.marker_pos = { x = s.origin.x, y = s.origin.y }
-    set_marker(surface, s, s.marker_pos)
-    game.print("A horde is descending on the factory from [gps=" ..
-      math.floor(s.origin.x) .. "," .. math.floor(s.origin.y) .. "," .. surface.name .. "]!")
-  end
+
+  local center, radius, buildings = factory_reference(surface)
+  local angle = (tick * 2.3999632) % (2 * math.pi)   -- per-event direction
+  local dist = radius + HORDE_OFFSET                 -- beyond the factory edge
+  local origin = { x = center.x + math.cos(angle) * dist, y = center.y + math.sin(angle) * dist }
+  s.origin = origin
+  s.target = nearest_building(buildings, origin, center)  -- nearest base edge
+  s.factory_center = center
+  s.factory_radius = radius
+
+  local est = estimate_size(evolution(surface), dur)
+  start_warning(surface, s, origin, est)
+  game.print("A horde of ~" .. est .. " zombies is descending on the factory from [gps=" ..
+    math.floor(origin.x) .. "," .. math.floor(origin.y) .. "," .. surface.name .. "]!")
 end
 
---- End the current swarm and schedule the next: clear the marker and geometry.
+--- End the SPAWNING phase and schedule the next event. Deliberately does NOT clear
+--- the warning — the marker persists (driven by update_warning) until the horde
+--- thins below WARNING_MIN_COUNT, which can be minutes after spawning stops.
 local function end_active(s, surface, tick, e)
-  clear_marker(s)
   s.active, s.active_start, s.period_end_tick, s.forced_until = false, nil, nil, nil
-  s.origin, s.anchor, s.marker_pos = nil, nil, nil
+  s.origin, s.target = nil, nil
   s.warned = false
   s.next_event_tick = tick + horde.event_interval_ticks(e, opt_frequency())
 end
@@ -463,11 +538,11 @@ function horde.on_tick(event)
         local count = math.floor(SWARM_BURST_BASE * opt_intensity() * (1 + 2 * e))
         count = clamp(count, 1, SWARM_BURST_CAP)
         spawn_horde(surface, s, count, swarm_tier(e), tick)
-        update_marker(surface, s, tick)
       end
       -- End at period_end OR at dawn — "at most one full night" (R-GEN-5). A
       -- FORCED event ignores the dawn end until its forced window elapses, so a
-      -- debug trigger works in daylight too.
+      -- debug trigger works in daylight too. (The WARNING is NOT ended here — it
+      -- persists below until the horde thins out.)
       local forced = s.forced_until ~= nil and tick < s.forced_until
       if tick >= (s.period_end_tick or tick) or (not night_now and not forced) then
         end_active(s, surface, tick, e)
@@ -487,6 +562,12 @@ function horde.on_tick(event)
     end
   end
 
+  -- The persistent warning runs EVERY sweep, independent of the on/off setting and
+  -- of whether spawning is still going — so it tracks the horde's centroid + count
+  -- and survives well past the spawning period, retiring only when the horde thins
+  -- below WARNING_MIN_COUNT (handled inside update_warning).
+  if s.warning then update_warning(surface, s) end
+
   ---------------------------------------------- night escalation (R-GEN-4)
   -- Baseline night pressure: a small trickle on ordinary nights, never while a
   -- horde event is active (so the spike stays clearly bigger). Scales with the
@@ -498,11 +579,10 @@ function horde.on_tick(event)
   end
 end
 
---- Force a swarm (telegraphed attack-wave; "horde event" in the code) to start
---- RIGHT NOW, regardless of the schedule, the on/off setting, or time of day —
---- the debug/console trigger (control.lua registers `/zomtorio-swarm` for it).
---- `minutes` overrides the spawning-period length; nil uses the evolution-scaled
---- default. Returns the duration in ticks.
+--- Force a horde (telegraphed attack-wave) to start RIGHT NOW, regardless of the
+--- schedule, the on/off setting, or time of day — the debug/console trigger
+--- (control.lua registers `/zomtorio-horde` for it). `minutes` overrides the
+--- spawning-period length; nil uses the evolution-scaled default. Returns ticks.
 function horde.force_event(minutes)
   local s = state()
   local surface = game and game.surfaces and game.surfaces[util.HOME_SURFACE]
@@ -532,8 +612,9 @@ function horde.reset_state()
   apply_map_settings()
   overrides = {}
   evolution_override = nil
+  factory_override = nil
   storage.zomtorio = storage.zomtorio or {}
-  if storage.zomtorio.horde then clear_marker(storage.zomtorio.horde) end
+  if storage.zomtorio.horde then clear_warning(storage.zomtorio.horde) end
   storage.zomtorio.horde = {
     next_event_tick = (game and game.tick or 0)
       + horde.event_interval_ticks(0, 1.0),
@@ -542,6 +623,33 @@ function horde.reset_state()
     period_end_tick = nil,
     forced_until = nil,
   }
+end
+
+--- Test-only: pin a deterministic factory reference (center/radius/buildings) so a
+--- headless test isn't at the mercy of stray player entities on the shared surface.
+--- nil restores the live scan.
+function horde.set_factory_override(o)
+  factory_override = o
+end
+
+--- Test-only: run one warning update pass on the home surface (like night.sweep_now),
+--- so a test can drive the count/centroid/auto-clear without waiting real ticks.
+function horde.update_warning_now()
+  local surface = game and game.surfaces and game.surfaces[util.HOME_SURFACE]
+  local s = state()
+  if surface and s.warning then update_warning(surface, s) end
+end
+
+--- Test-only: start a warning at a CONTROLLED position (post-spawn, so the
+--- <WARNING_MIN_COUNT retire logic applies), letting a test exercise the
+--- count/centroid/auto-clear lifecycle at a generated location rather than the far
+--- spawn origin. nil-safe outside a game.
+function horde.start_warning_at(pos, est)
+  local surface = game and game.surfaces and game.surfaces[util.HOME_SURFACE]
+  if not surface then return end
+  local s = state()
+  s.active = false
+  start_warning(surface, s, pos, est or 100)
 end
 
 --- Test-only: pin individual settings (each nil => live setting).
@@ -576,6 +684,15 @@ function horde.get_state()
     period_end_tick = s.period_end_tick,
     forced_until    = s.forced_until,
     origin          = s.origin,
+    target          = s.target,
+    factory_center  = s.factory_center,
+    factory_radius  = s.factory_radius,
+    -- Warning view: present iff a marker is up; count is the live tracked size.
+    warning = s.warning and {
+      count    = s.warning.count,
+      centroid = s.warning.centroid,
+      active   = (s.warning.marker ~= nil and s.warning.marker.valid) or false,
+    } or nil,
   }
 end
 

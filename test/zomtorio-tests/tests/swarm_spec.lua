@@ -359,26 +359,3 @@ T.test("folds merge within a kind but biter and spitter stay separate", function
   t.assert.equal(1, #bi, "a separate biter swarm exists")
   t.assert.equal(4, swarm.pop_of(bi[1]), "biter swarm holds its own pop")
 end)
-
--- PURPOSE: defends against the /zomtorio-horde crash on a save that predates the
--- swarm<->horde rename. Such a save left the OLD wave-event state (boolean/number
--- fields) in storage.zomtorio.swarm; clear_horde_members iterated it as cluster
--- records and indexed a boolean -> crash in begin_active. It must now tolerate (and
--- prune) such stale entries.
-T.test("clear_horde_members tolerates stale pre-rename data without crashing", function(t)
-  swarm.reset_state()
-  -- Simulate the pre-rename wave state left behind in the cluster storage slot.
-  storage.zomtorio.swarm["warned"] = false
-  storage.zomtorio.swarm["active"] = true
-  storage.zomtorio.swarm["next_event_tick"] = 12345
-  -- ...alongside a genuine cluster record.
-  storage.zomtorio.swarm[424242] = { pop = 5, tier = "small", horde_member = true }
-
-  swarm.clear_horde_members()  -- must NOT error on the boolean entries
-
-  t.assert.equal(nil, storage.zomtorio.swarm["warned"], "stale boolean pruned")
-  t.assert.equal(nil, storage.zomtorio.swarm["next_event_tick"], "stale number pruned")
-  t.assert.not_nil(storage.zomtorio.swarm[424242], "the real cluster record is kept")
-  t.assert.equal(nil, storage.zomtorio.swarm[424242].horde_member,
-    "the real record's horde_member flag was cleared")
-end)

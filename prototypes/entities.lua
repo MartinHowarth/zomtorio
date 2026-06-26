@@ -24,8 +24,12 @@ local CLUSTER_OFFSETS = {
   { -0.6, 0.5 }, { 0.65, 0.55 }, { 0, 0.85 }, { 0, -0.8 },
 }
 
--- Tint each biter in the clump a sickly green so it reads as distinct from a lone biter.
-local CLUSTER_TINT = { r = 0.55, g = 0.85, b = 0.45, a = 1.0 }
+-- Tint each zombie in the clump so a swarm reads as distinct from a lone enemy, and
+-- so biter swarms (sickly green) and spitter swarms (sickly violet) read differently.
+local CLUSTER_TINT = {
+  biter   = { r = 0.55, g = 0.85, b = 0.45, a = 1.0 },  -- sickly green
+  spitter = { r = 0.70, g = 0.45, b = 0.90, a = 1.0 },  -- sickly violet
+}
 
 -- A shambler reads as a washed-out, grey zombie (a reanimated corpse).
 local SHAMBLER_TINT = { r = 0.6, g = 0.6, b = 0.6, a = 1.0 }
@@ -52,10 +56,10 @@ end
 -- anyway. A sane number — 1e6 read as ridiculous on the health bar.
 local CLUSTER_MAX_HEALTH = 1000
 
---- Turn one biter animation into a clump: replicate its layers once per offset,
---- shifting (and green-tinting) each copy. Handles the layered or single-animation
+--- Turn one zombie animation into a clump: replicate its layers once per offset,
+--- shifting (and `tint`-ing) each copy. Handles the layered or single-animation
 --- shapes a unit's run/attack animation can take.
-local function clump(anim)
+local function clump(anim, tint)
   if type(anim) ~= "table" then return anim end
   local src = anim.layers or { anim }
   local layers = {}
@@ -65,7 +69,7 @@ local function clump(anim)
       local sx = (c.shift and (c.shift[1] or c.shift.x)) or 0
       local sy = (c.shift and (c.shift[2] or c.shift.y)) or 0
       c.shift = { sx + off[1], sy + off[2] }
-      if not c.draw_as_shadow then c.tint = CLUSTER_TINT end
+      if not c.draw_as_shadow then c.tint = tint end
       layers[#layers + 1] = c
     end
   end
@@ -74,27 +78,34 @@ end
 
 local new_protos = {}
 
-for _, tier in ipairs(tiers.ORDER) do
-  local source = data.raw.unit[tiers.INDIVIDUAL[tier]]
-  if source then
-    local horde = util.table.deepcopy(source)
-    horde.name = tiers.SWARM[tier]
-    -- keep it discoverable in the same family but ordered after the biters
-    horde.order = (horde.order or "b") .. "-zomtorio-horde"
+-- One swarm-cluster prototype per (kind, tier): a clump of that kind's individual,
+-- tinted per kind so biter and spitter swarms read differently (R-HORDE-3). Built
+-- for BOTH kinds so the engine's evolution-gated spitter spawns can form spitter
+-- swarms (lib/swarm + lib/nest route folded spitters here by kind).
+for _, kind in ipairs(tiers.KINDS) do
+  local tint = CLUSTER_TINT[kind]
+  for _, tier in ipairs(tiers.ORDER) do
+    local source = data.raw.unit[tiers.individual_name(kind, tier)]
+    if source then
+      local cluster = util.table.deepcopy(source)
+      cluster.name = tiers.swarm_name(kind, tier)
+      -- keep it discoverable in the same family but ordered after the base enemies
+      cluster.order = (cluster.order or "b") .. "-zomtorio-swarm"
 
-    -- Make it read as a clump of several biters (R-HORDE-3).
-    if horde.run_animation then horde.run_animation = clump(horde.run_animation) end
-    if horde.attack_parameters and horde.attack_parameters.animation then
-      horde.attack_parameters.animation = clump(horde.attack_parameters.animation)
+      -- Make it read as a clump of several zombies (R-HORDE-3).
+      if cluster.run_animation then cluster.run_animation = clump(cluster.run_animation, tint) end
+      if cluster.attack_parameters and cluster.attack_parameters.animation then
+        cluster.attack_parameters.animation = clump(cluster.attack_parameters.animation, tint)
+      end
+
+      -- Health is one-shot headroom only (see CLUSTER_MAX_HEALTH); the script tracks
+      -- population in storage and is the only thing that destroys the unit (at pop 0).
+      cluster.max_health = CLUSTER_MAX_HEALTH
+      -- Don't let it heal back up between hits (we keep it pinned at max ourselves).
+      cluster.healing_per_tick = 0
+
+      new_protos[#new_protos + 1] = cluster
     end
-
-    -- Health is one-shot headroom only (see CLUSTER_MAX_HEALTH); the script tracks
-    -- population in storage and is the only thing that destroys the unit (at pop 0).
-    horde.max_health = CLUSTER_MAX_HEALTH
-    -- Don't let it heal back up between hits (we keep it pinned at max ourselves).
-    horde.healing_per_tick = 0
-
-    new_protos[#new_protos + 1] = horde
   end
 end
 

@@ -27,8 +27,12 @@ local NIGHT_VARIANTS = {
   "small-biter", "medium-biter", "big-biter", "behemoth-biter",
   "small-spitter", "medium-spitter", "big-spitter", "behemoth-spitter",
 }
-for _, cluster_name in pairs(tiers.SWARM) do
-  NIGHT_VARIANTS[#NIGHT_VARIANTS + 1] = cluster_name
+-- Every swarm cluster, BOTH kinds (biter + spitter), so spitter swarms speed up at
+-- night too. (prototypes.entities runs before this file, so the clusters exist.)
+for _, kind in ipairs(tiers.KINDS) do
+  for _, cluster_name in pairs(tiers.SWARM_BY_KIND[kind]) do
+    NIGHT_VARIANTS[#NIGHT_VARIANTS + 1] = cluster_name
+  end
 end
 
 for _, base_name in ipairs(NIGHT_VARIANTS) do

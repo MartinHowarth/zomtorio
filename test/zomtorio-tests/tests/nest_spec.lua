@@ -117,3 +117,42 @@ T.test("a non-enemy unit is ignored", function(t)
   t.assert.is_true(biter.valid, "left untouched")
   t.assert.equal(before, swarm.active_count(), "not counted against the cap")
 end)
+
+-- PURPOSE: defends the spitter-swarm grouping. The ENGINE decides to emit a spitter
+-- (evolution-gated, vanilla); over the cap it must fold into a SPITTER swarm. Before
+-- this fix, over-cap spitters folded into BITER swarms (tier_of -> biter cluster) and
+-- vanished as spitters -- the user's "spitters aren't spawning" report.
+T.test("over the cap, a nest spitter folds into a spitter swarm (not a biter one)", function(t)
+  reset(0)                      -- cap full -> nest output must fold
+  nest.set_budget_override(1000)  -- budget high so it folds rather than throttles
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 16)
+  local sp = t.surface.create_entity { name = "small-spitter", position = o, force = "enemy" }
+  t.assert.not_nil(sp, "test spitter created")
+  nest.on_entity_spawned { entity = sp }
+  t.assert.is_false(sp.valid, "the over-cap spitter is folded (removed as an individual)")
+
+  local cluster = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("spitter", "small"), position = o, radius = 32,
+  }[1]
+  t.assert.not_nil(cluster, "a SPITTER swarm formed at the nest")
+  t.assert.equal("spitter", swarm.kind_of(cluster), "tracked as a spitter swarm")
+  -- and no biter swarm was created from the spitter
+  local biter_cluster = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("biter", "small"), position = o, radius = 32,
+  }[1]
+  t.assert.equal(nil, biter_cluster, "the spitter did NOT form a biter swarm")
+end)
+
+-- PURPOSE: regression — a folded biter still forms a BITER swarm after the kind axis.
+T.test("over the cap, a nest biter still folds into a biter swarm", function(t)
+  reset(0)
+  nest.set_budget_override(1000)
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 16)
+  local b = make_biter(t.surface, o)
+  nest.on_entity_spawned { entity = b }
+  local cluster = find_cluster(t.surface, o)   -- biter swarm name
+  t.assert.not_nil(cluster, "a biter swarm formed")
+  t.assert.equal("biter", swarm.kind_of(cluster), "tracked as a biter swarm")
+end)

@@ -60,6 +60,13 @@ local function tier_of(name)
   return "small"
 end
 
+--- biter vs spitter from the spawned unit's prototype name. The engine (vanilla,
+--- evolution-gated logic) decides WHICH spawns; we only group a spitter into a
+--- SPITTER swarm so it doesn't get absorbed into a biter swarm and vanish.
+local function kind_of(name)
+  return string.find(name, "spitter") and "spitter" or "biter"
+end
+
 -- Optional test override of the budget (runtime-global settings can't be written by
 -- the separate test harness mod). nil in normal play -> the pollution-scaled budget.
 local budget_override
@@ -120,13 +127,15 @@ function nest.on_entity_spawned(event)
     return
   end
 
-  -- Fold +1 into the nearest local cluster. Release first (pcall-guarded: the
-  -- method is 2.1.7+ and only valid for spawner-owned units) so destroying the
-  -- unit frees the spawner's slot and it keeps producing to fill the swarm.
+  -- Fold +1 into the nearest local cluster of the same KIND (so a spitter forms a
+  -- spitter swarm, not a biter one). Release first (pcall-guarded: the method is
+  -- 2.1.7+ and only valid for spawner-owned units) so destroying the unit frees the
+  -- spawner's slot and it keeps producing to fill the swarm.
   local tier = tier_of(entity.name)
+  local kind = kind_of(entity.name)
   pcall(function() entity.release_from_spawner() end)
   entity.destroy()
-  swarm.fold(surface, pos, 1, tier, util.ENEMY_FORCE)
+  swarm.fold(surface, pos, 1, tier, util.ENEMY_FORCE, 0, kind)
 end
 
 --------------------------------------------------------------------- test API

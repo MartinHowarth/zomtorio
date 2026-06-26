@@ -302,3 +302,60 @@ T.test("bursting preserves the shambler fraction as shambler individuals", funct
   t.assert.at_least(6, #shamblers,
     "the surviving shambler share burst as shambler individuals")
 end)
+
+-- ------------------------------------------------------------ spitter swarms
+-- PURPOSE: defends the biter/spitter "kind" axis. A folded spitter must form a
+-- SPITTER swarm cluster, NOT be absorbed into a biter swarm. Before the kind axis,
+-- spitters folded into biter clusters and vanished as spitters (the "spitters aren't
+-- spawning" report).
+T.test("folding a spitter forms a spitter swarm, not a biter swarm", function(t)
+  reset(0)  -- cap full so the fold makes a cluster
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 16)
+  swarm.fold(t.surface, o, 12, "medium", "enemy", 0, "spitter")
+
+  local spitter = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("spitter", "medium"), position = o, radius = 32,
+  }[1]
+  t.assert.not_nil(spitter, "a spitter swarm cluster should exist")
+  t.assert.equal(12, swarm.pop_of(spitter), "spitter swarm holds the folded pop")
+  t.assert.equal("spitter", swarm.kind_of(spitter), "tracked as a spitter swarm")
+
+  local biter = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("biter", "medium"), position = o, radius = 32,
+  }[1]
+  t.assert.equal(nil, biter, "no biter swarm should be created for a folded spitter")
+end)
+
+-- PURPOSE: a spitter swarm's pop math must use the SPITTER's single-zombie health
+-- (not the biter's), so multi-kill sizing is correct per kind.
+T.test("a spitter swarm uses spitter single-zombie health, distinct from biter", function(t)
+  local biter_h   = swarm.single_health("medium", "biter")
+  local spitter_h = swarm.single_health("medium", "spitter")
+  t.assert.is_true(biter_h > 0 and spitter_h > 0, "both kinds' healths resolve")
+  t.assert.is_true(biter_h ~= spitter_h, string.format(
+    "spitter medium health (%s) differs from biter (%s)",
+    tostring(spitter_h), tostring(biter_h)))
+end)
+
+-- PURPOSE: a same-kind fold MERGES (one growing swarm), and biter vs spitter folds at
+-- the same spot stay SEPARATE clusters (don't cross-merge).
+T.test("folds merge within a kind but biter and spitter stay separate", function(t)
+  reset(0)
+  local o = t.test_origin
+  t.world.clear(t.surface, o, 16)
+  swarm.fold(t.surface, o, 5, "small", "enemy", 0, "spitter")
+  swarm.fold(t.surface, o, 7, "small", "enemy", 0, "spitter")  -- merges with the first
+  swarm.fold(t.surface, o, 4, "small", "enemy", 0, "biter")    -- separate biter swarm
+
+  local sp = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("spitter", "small"), position = o, radius = 32,
+  }
+  local bi = t.surface.find_entities_filtered {
+    name = tiers.swarm_name("biter", "small"), position = o, radius = 32,
+  }
+  t.assert.equal(1, #sp, "the two spitter folds merged into one spitter swarm")
+  t.assert.equal(12, swarm.pop_of(sp[1]), "spitter swarm pop is 5+7")
+  t.assert.equal(1, #bi, "a separate biter swarm exists")
+  t.assert.equal(4, swarm.pop_of(bi[1]), "biter swarm holds its own pop")
+end)

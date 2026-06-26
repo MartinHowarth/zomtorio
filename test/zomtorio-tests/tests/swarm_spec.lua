@@ -1,6 +1,6 @@
 -- S2 tests: the swarm population model + unified cap-aware spawner
 -- (R-HORDE-2..6). Loads the real module from the linked main mod via the
--- __zomtorio__ require path, so the spawner, cap accounting and hit logic under
+-- __Zomtorio__ require path, so the spawner, cap accounting and hit logic under
 -- test are the production code.
 --
 -- IMPORTANT — why we call swarm.on_entity_damaged DIRECTLY instead of via the
@@ -19,8 +19,8 @@
 -- internal hook the runtime exposes for exactly this purpose.
 
 local T     = require("harness.runner")
-local swarm = require("__zomtorio__.lib.swarm")
-local tiers = require("__zomtorio__.lib.tiers")
+local swarm = require("__Zomtorio__.lib.swarm")
+local tiers = require("__Zomtorio__.lib.tiers")
 
 local DEFAULT_CAP = 1000
 

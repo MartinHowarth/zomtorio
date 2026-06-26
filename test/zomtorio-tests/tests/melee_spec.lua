@@ -1,5 +1,5 @@
 -- S8 tests: swarm melee + the double-tap toggle (R-MELEE-1..5). Loads the real
--- modules from the linked main mod via the __zomtorio__ require path.
+-- modules from the linked main mod via the __Zomtorio__ require path.
 --
 -- HARNESS NOTES (see horde_spec / corpses_spec headers):
 --  * Each mod has its own Lua `storage`; we drive handlers DIRECTLY so they read
@@ -13,10 +13,10 @@
 --    double-tap corpse suppression by calling corpses.on_entity_died directly.
 
 local T       = require("harness.runner")
-local melee   = require("__zomtorio__.lib.melee")
-local swarm   = require("__zomtorio__.lib.swarm")
-local corpses = require("__zomtorio__.lib.corpses")
-local tiers   = require("__zomtorio__.lib.tiers")
+local melee   = require("__Zomtorio__.lib.melee")
+local swarm   = require("__Zomtorio__.lib.swarm")
+local corpses = require("__Zomtorio__.lib.corpses")
+local tiers   = require("__Zomtorio__.lib.tiers")
 
 local BASE_MELEE  = "zomtorio-zombie-melee"
 local SWARM_MELEE = "zomtorio-swarm-melee"

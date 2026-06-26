@@ -15,9 +15,9 @@
 
 local T = require("harness.runner")
 
-local config = require("__zomtorio__.lib.config")
-local horde  = require("__zomtorio__.lib.horde")
-local tiers  = require("__zomtorio__.lib.tiers")
+local config = require("__Zomtorio__.lib.config")
+local horde  = require("__Zomtorio__.lib.horde")
+local tiers  = require("__Zomtorio__.lib.tiers")
 
 -- Vanilla (unmodded) baselines.
 local VANILLA_SMALL_BITER_SPEED  = 0.2

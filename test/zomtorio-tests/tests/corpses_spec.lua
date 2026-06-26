@@ -1,6 +1,6 @@
 -- S7 tests: corpse drops, the corpse/kiln prototypes, and reanimation
 -- (R-CORPSE-1..7). Loads the real modules from the linked main mod via the
--- __zomtorio__ require path so the drop logic and prototype config under test are
+-- __Zomtorio__ require path so the drop logic and prototype config under test are
 -- the production code.
 --
 -- Why we call corpses.on_entity_died / swarm.on_entity_damaged DIRECTLY: each mod
@@ -10,9 +10,9 @@
 -- to every mod, so we count them straight off the surface.
 
 local T       = require("harness.runner")
-local corpses = require("__zomtorio__.lib.corpses")
-local swarm   = require("__zomtorio__.lib.swarm")
-local tiers   = require("__zomtorio__.lib.tiers")
+local corpses = require("__Zomtorio__.lib.corpses")
+local swarm   = require("__Zomtorio__.lib.swarm")
+local tiers   = require("__Zomtorio__.lib.tiers")
 
 local CORPSE_ITEM = "zomtorio-corpse"
 

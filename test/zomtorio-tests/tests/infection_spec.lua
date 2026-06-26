@@ -1,5 +1,5 @@
 -- S4 tests: infection of buildings and robots (R-INF-1..6, R-SCOPE-1). Loads the
--- real module from the linked main mod via the __zomtorio__ require path.
+-- real module from the linked main mod via the __Zomtorio__ require path.
 --
 -- We drive on_entity_damaged / on_tick / infect DIRECTLY (synthesizing the
 -- event): each mod has its own Lua state and `storage`, so the infection module
@@ -13,7 +13,7 @@
 -- time-to-death with set_ticks_override for deterministic, short tests.
 
 local T         = require("harness.runner")
-local infection = require("__zomtorio__.lib.infection")
+local infection = require("__Zomtorio__.lib.infection")
 
 -- Reset state and clear any overrides left by a prior test.
 local function reset()

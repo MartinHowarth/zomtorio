@@ -44,10 +44,10 @@ fi
 ZOMTORIO_LINE=''
 if grep -q '"factorio_version"[[:space:]]*:[[:space:]]*"2\.' "$REPO/info.json" 2>/dev/null; then
   # copy the main mod, excluding repo cruft
-  mkdir -p "$MODS/zomtorio"
+  mkdir -p "$MODS/Zomtorio"
   (cd "$REPO" && tar --exclude='./.git' --exclude='./test' --exclude='./.factorio-data' \
-      -cf - .) | (cd "$MODS/zomtorio" && tar -xf -)
-  ZOMTORIO_LINE=',{"name":"zomtorio","enabled":true}'
+      -cf - .) | (cd "$MODS/Zomtorio" && tar -xf -)
+  ZOMTORIO_LINE=',{"name":"Zomtorio","enabled":true}'
 fi
 
 cat > "$MODS/mod-list.json" <<EOF

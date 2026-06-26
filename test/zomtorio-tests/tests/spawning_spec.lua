@@ -1,5 +1,5 @@
 -- S3 tests: buildings become zombie sources on death (R-DEATH-1..4). Loads the
--- real modules from the linked main mod via the __zomtorio__ require path.
+-- real modules from the linked main mod via the __Zomtorio__ require path.
 --
 -- IMPORTANT — why we call spawning.on_entity_died DIRECTLY (synthesizing the
 -- event): each mod has its OWN Lua state and `storage`. The spawning/swarm
@@ -14,9 +14,9 @@
 -- death position to assert the spawned count. on_init() resets storage first.
 
 local T        = require("harness.runner")
-local spawning = require("__zomtorio__.lib.spawning")
-local swarm    = require("__zomtorio__.lib.swarm")
-local tiers    = require("__zomtorio__.lib.tiers")
+local spawning = require("__Zomtorio__.lib.spawning")
+local swarm    = require("__Zomtorio__.lib.swarm")
+local tiers    = require("__Zomtorio__.lib.tiers")
 
 -- Total population standing near `pos` across all cluster tiers (cap pinned to 0
 -- means no individuals exist, so this is the full spawned count).

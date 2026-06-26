@@ -8,7 +8,7 @@ data:extend({
   {
     type = "sprite",
     name = "zomtorio-biohazard",
-    filename = "__zomtorio__/graphics/biohazard.png",
+    filename = "__Zomtorio__/graphics/biohazard.png",
     width = 64,
     height = 64,
     flags = { "icon" },

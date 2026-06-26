@@ -12,9 +12,9 @@
 
 local T = require("harness.runner")
 
-local horde = require("__zomtorio__.lib.horde")
-local swarm = require("__zomtorio__.lib.swarm")
-local tiers = require("__zomtorio__.lib.tiers")
+local horde = require("__Zomtorio__.lib.horde")
+local swarm = require("__Zomtorio__.lib.swarm")
+local tiers = require("__Zomtorio__.lib.tiers")
 
 -- A tick that satisfies on_tick's internal throttle (multiple of its period).
 local TICK = 6000

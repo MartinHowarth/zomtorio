@@ -50,8 +50,8 @@ ln -sfn "$HERE/zomtorio-tests" "$MODS/zomtorio-tests"
 # Link the main mod too, but only once it's a valid 2.1 mod (so the harness can
 # load standalone today and pick up zomtorio automatically once it exists).
 if grep -q '"factorio_version"[[:space:]]*:[[:space:]]*"2\.' "$REPO/info.json" 2>/dev/null; then
-  ln -sfn "$REPO" "$MODS/zomtorio"
-  ZOMTORIO_LINE=',{"name":"zomtorio","enabled":true}'
+  ln -sfn "$REPO" "$MODS/Zomtorio"
+  ZOMTORIO_LINE=',{"name":"Zomtorio","enabled":true}'
 else
   ZOMTORIO_LINE=''
 fi

@@ -32,10 +32,10 @@ mkdir -p "$MODS"
 
 # Refresh ONLY the mod copy (keep saves/config). Exclude repo cruft + the test dir, so
 # the test harness mod is never present.
-rm -rf "$MODS/zomtorio"
-mkdir -p "$MODS/zomtorio"
+rm -rf "$MODS/Zomtorio"
+mkdir -p "$MODS/Zomtorio"
 (cd "$HERE" && tar --exclude='./.git' --exclude='./test' --exclude='./.factorio-data' \
-    --exclude='./play.sh' -cf - .) | (cd "$MODS/zomtorio" && tar -xf -)
+    --exclude='./play.sh' -cf - .) | (cd "$MODS/Zomtorio" && tar -xf -)
 
 cat > "$MODS/mod-list.json" <<EOF
 {"mods":[
@@ -43,7 +43,7 @@ cat > "$MODS/mod-list.json" <<EOF
   {"name":"elevated-rails","enabled":$SA},
   {"name":"quality","enabled":$SA},
   {"name":"space-age","enabled":$SA},
-  {"name":"zomtorio","enabled":true}
+  {"name":"Zomtorio","enabled":true}
 ]}
 EOF
 

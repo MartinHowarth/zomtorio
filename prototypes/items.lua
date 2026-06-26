@@ -22,7 +22,7 @@ local KILN_DRIED_FUEL_MJ  = 4
 -- generated from the base icon by graphics/biter-grey.gen.py (preserves the icon's
 -- mipmap strip + alpha), shipped as graphics/biter-grey.png.
 local CORPSE_ICON       = "__base__/graphics/icons/small-biter.png"
-local KILN_DRIED_ICON   = "__zomtorio__/graphics/biter-grey.png"
+local KILN_DRIED_ICON   = "__Zomtorio__/graphics/biter-grey.png"
 
 data:extend({
   {

@@ -1,5 +1,5 @@
 -- S5 tests: player (character) infection (R-PINF-1..5, R-SCOPE-1). Loads the real
--- module from the linked main mod via __zomtorio__ and drives it directly.
+-- module from the linked main mod via __Zomtorio__ and drives it directly.
 --
 -- CRUCIAL: the headless benchmark has NO connected players, so the whole feature
 -- is keyed on the CHARACTER ENTITY (its unit_number), never a LuaPlayer. Tests
@@ -9,7 +9,7 @@
 -- on_tick once per simulated tick — a plain `for` loop within one step works.
 
 local T         = require("harness.runner")
-local infection = require("__zomtorio__.lib.infection")
+local infection = require("__Zomtorio__.lib.infection")
 
 local function reset()
   infection.reset_state()

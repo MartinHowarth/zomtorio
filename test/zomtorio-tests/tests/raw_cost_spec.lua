@@ -1,11 +1,11 @@
 -- S1 tests: total-raw cost decomposition (R-DEATH-2, R-DEATH-4).
 --
 -- Loads the real module from the linked main mod via the cross-mod require path
--- __zomtorio__. The cache lives in storage, which is available at runtime; we
+-- __Zomtorio__. The cache lives in storage, which is available at runtime; we
 -- (re)initialise it once before asserting.
 
 local T = require("harness.runner")
-local raw_cost = require("__zomtorio__.lib.raw_cost")
+local raw_cost = require("__Zomtorio__.lib.raw_cost")
 
 raw_cost.on_init()
 

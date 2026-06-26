@@ -11,10 +11,10 @@
 
 local T = require("harness.runner")
 
-local night  = require("__zomtorio__.lib.night")
-local config = require("__zomtorio__.lib.config")
-local swarm  = require("__zomtorio__.lib.swarm")
-local tiers  = require("__zomtorio__.lib.tiers")
+local night  = require("__Zomtorio__.lib.night")
+local config = require("__Zomtorio__.lib.config")
+local swarm  = require("__Zomtorio__.lib.swarm")
+local tiers  = require("__Zomtorio__.lib.tiers")
 
 local function set_midnight(surface)
   surface.freeze_daytime = true

@@ -11,9 +11,9 @@
 -- exactly what the engine delivers, so the routing logic is exercised faithfully.
 
 local T     = require("harness.runner")
-local nest  = require("__zomtorio__.lib.nest")
-local swarm = require("__zomtorio__.lib.swarm")
-local tiers = require("__zomtorio__.lib.tiers")
+local nest  = require("__Zomtorio__.lib.nest")
+local swarm = require("__Zomtorio__.lib.swarm")
+local tiers = require("__Zomtorio__.lib.tiers")
 
 --- Spawn a real enemy biter near `pos` to stand in for one a spawner just emitted.
 local function make_biter(surface, pos)

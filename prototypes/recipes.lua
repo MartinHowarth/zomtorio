@@ -155,7 +155,7 @@ pyre.dying_explosion = nil
 pyre.icon = nil
 pyre.icons = {
   { icon = "__base__/graphics/icons/wooden-chest.png", icon_size = 64 },
-  { icon = "__zomtorio__/graphics/flame.png", icon_size = 128, scale = 0.22, shift = { 0, -7 } },
+  { icon = "__Zomtorio__/graphics/flame.png", icon_size = 128, scale = 0.22, shift = { 0, -7 } },
 }
 -- One corpse slot in, nothing out (the burn recipe yields nothing).
 pyre.source_inventory_size = 1
@@ -177,7 +177,7 @@ pyre.graphics_set = {
       {
         -- static, mostly-opaque molten embers filling the crate's mouth (alpha is
         -- baked into the PNG by graphics/ember.gen.py). Always drawn.
-        filename = "__zomtorio__/graphics/ember.png",
+        filename = "__Zomtorio__/graphics/ember.png",
         width = 128, height = 128, scale = 0.9, shift = { 0, -0.1 },
       },
     },
@@ -207,7 +207,7 @@ data:extend({
     -- A crate with a flame on top (matches the building).
     icons = {
       { icon = "__base__/graphics/icons/wooden-chest.png", icon_size = 64 },
-      { icon = "__zomtorio__/graphics/flame.png", icon_size = 128, scale = 0.22, shift = { 0, -7 } },
+      { icon = "__Zomtorio__/graphics/flame.png", icon_size = 128, scale = 0.22, shift = { 0, -7 } },
     },
     subgroup = "production-machine",
     order = "z-zomtorio-zombie-pyre",

@@ -7,8 +7,8 @@
 -- nest density / pollution cost / night-speedup in generation_spec & night_spec.)
 
 local T     = require("harness.runner")
-local swarm = require("__zomtorio__.lib.swarm")
-local tiers = require("__zomtorio__.lib.tiers")
+local swarm = require("__Zomtorio__.lib.swarm")
+local tiers = require("__Zomtorio__.lib.tiers")
 
 -- Sum the population of all small clusters near a position (cap pinned to 0 means
 -- every spawned zombie folds into a cluster, so this is the full spawned count).

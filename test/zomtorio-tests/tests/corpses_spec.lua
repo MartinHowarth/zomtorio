@@ -407,3 +407,25 @@ T.test("with bot collection off corpses are not marked", function(t)
 
   corpses.set_bot_collect_override(nil)
 end)
+
+-- ------------------------------------------------- zombie pyre (corpse incinerator)
+-- PURPOSE: defends that the zombie pyre actually DESTROYS inserted corpses over time
+-- (~1 every 5s) with NO electricity (void energy). If the furnace type / burn recipe /
+-- void-energy wiring regresses, corpses would pile up in it instead of being safely
+-- disposed of (the no-reanimation alternative to kiln-drying).
+T.test("the zombie pyre incinerates inserted corpses over time (no power)", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 10)
+    t.pyre = t.world.place(t.surface, "zomtorio-zombie-pyre", o)
+    t.assert.not_nil(t.pyre, "pyre placed")
+    t.pyre.insert { name = CORPSE_ITEM, count = 2 }
+    t.assert.equal(2, t.pyre.get_item_count(CORPSE_ITEM), "2 corpses loaded into the pyre")
+  end,
+  -- 2 corpses x 5s = ~600 ticks; wait comfortably past so both finish burning.
+  { after = 900, fn = function(t)
+    t.assert.is_true(t.pyre.valid, "pyre still standing")
+    t.assert.equal(0, t.pyre.get_item_count(CORPSE_ITEM),
+      "both corpses were incinerated (burned away, not piled up)")
+  end },
+})

@@ -110,3 +110,104 @@ data:extend({
     allow_decomposition = false,   -- don't let it feed the S1 total-raw walk
   },
 })
+
+------------------------------------------------------------ the zombie pyre
+-- An ever-burning firepit: corpses inserted into it burn away continuously, no
+-- electricity. Unlike the corpse-kiln (an assembling-machine that needs its recipe
+-- set), the pyre is a FURNACE, which auto-selects its recipe from whatever ingredient
+-- is inserted — so a single inserter dropping corpses in just burns them. The burn
+-- recipe produces NOTHING (the corpse is destroyed); the 5s craft time = 1 corpse / 5s.
+-- energy_source = void (like the kiln) means it runs with no power, "ever-burning".
+
+data:extend({
+  { type = "recipe-category", name = "zomtorio-pyre-burning" },
+})
+
+local pyre = util.table.deepcopy(data.raw["furnace"]["stone-furnace"])
+pyre.name = "zomtorio-zombie-pyre"
+pyre.minable = { mining_time = 0.5, result = "zomtorio-zombie-pyre" }
+pyre.crafting_categories = { "zomtorio-pyre-burning" }
+pyre.crafting_speed = 1.0
+pyre.next_upgrade = nil
+pyre.fast_replaceable_group = nil
+pyre.placeable_by = { item = "zomtorio-zombie-pyre", count = 1 }
+-- No electricity: void energy makes it run for free (the corpses are the "fuel").
+pyre.energy_source = { type = "void" }
+pyre.energy_usage = "1kW"
+-- 4x4 footprint.
+pyre.collision_box = { { -1.9, -1.9 }, { 1.9, 1.9 } }
+pyre.selection_box = { { -2, -2 }, { 2, 2 } }
+pyre.tile_width = 4
+pyre.tile_height = 4
+-- One corpse slot in, nothing out (the burn recipe yields nothing).
+pyre.source_inventory_size = 1
+pyre.result_inventory_size = 0
+-- Looks like a wooden chest with an ALWAYS-animated fire on top (an ever-burning
+-- firepit). The fire lives in `animation` (always drawn), not working_visualisations,
+-- so it burns visibly even between corpses. (Sprite paths are GUI-only; the headless
+-- engine ships no graphics and does not load/validate them.)
+pyre.graphics_set = {
+  animation = {
+    layers = {
+      {
+        filename = "__base__/graphics/entity/wooden-chest/wooden-chest.png",
+        width = 62, height = 72, scale = 3.0, shift = { 0, 0.1 },
+        -- A static layer must match the fire layer's frame count (all layers of one
+        -- animation share frame count): repeat the single chest frame 25 times.
+        frame_count = 1, repeat_count = 25,
+      },
+      {
+        -- constant flames rising from the pit
+        filename = "__base__/graphics/entity/fire-flame/fire-flame-13.png",
+        line_length = 8, width = 60, height = 118, frame_count = 25,
+        axially_symmetrical = false, direction_count = 1,
+        blend_mode = "additive", draw_as_glow = true,
+        animation_speed = 0.5, scale = 1.8, shift = { 0, -0.8 },
+      },
+    },
+  },
+}
+-- A furnace clone carries working_visualisations (the smelting glow); drop them so the
+-- only fire is our always-on one.
+pyre.working_visualisations = nil
+
+data:extend({
+  pyre,
+  {
+    type = "item",
+    name = "zomtorio-zombie-pyre",
+    icons = {
+      { icon = "__base__/graphics/icons/wooden-chest.png", icon_size = 64 },
+    },
+    subgroup = "production-machine",
+    order = "z-zomtorio-zombie-pyre",
+    place_result = "zomtorio-zombie-pyre",
+    stack_size = 20,
+  },
+  -- Cheap, no tech gate: 50 wood.
+  {
+    type = "recipe",
+    name = "zomtorio-zombie-pyre",
+    enabled = true,
+    energy_required = 1,
+    ingredients = { { type = "item", name = "wood", amount = 50 } },
+    results = { { type = "item", name = "zomtorio-zombie-pyre", amount = 1 } },
+  },
+  -- The burn recipe the furnace auto-selects from an inserted corpse: 1 corpse in,
+  -- NOTHING out, 5s -> exactly 1 corpse incinerated every 5 seconds.
+  {
+    type = "recipe",
+    name = "zomtorio-burn-corpse",
+    categories = { "zomtorio-pyre-burning" },
+    enabled = true,
+    energy_required = 5,
+    ingredients = { { type = "item", name = "zomtorio-corpse", amount = 1 } },
+    results = {},
+    -- Empty results => no product to derive an icon from, so the recipe needs an
+    -- explicit one. Hide it from menus: it's furnace-only, never hand-crafted.
+    icon = "__base__/graphics/icons/small-biter.png",
+    icon_size = 64,
+    hidden = true,
+    allow_decomposition = false,
+  },
+})

@@ -479,3 +479,39 @@ T.test("REAL: an infected pump infects the fluid wagon on its serviced rail", {
       "an infected pump infected the fluid wagon on its serviced rail")
   end },
 })
+
+-- =====================================================================
+-- M. The REVERSE of L: an infected fluid WAGON infects the pump servicing it.
+--    PURPOSE: defends wagon -> pump spread. Pump->wagon already worked, but an
+--    infected wagon left its docked pump (and its pipe network) clean — the
+--    non-fluidbox link was only read one way. The wagon is force-infected via the
+--    live mod's debug interface (a bite may not infect rolling stock), then the
+--    LIVE on_tick sweep must carry infection to the pump.
+-- =====================================================================
+T.test("REAL: an infected fluid wagon infects the pump servicing it", {
+  function(t)
+    local o = t.test_origin
+    t.world.clear(t.surface, o, 16)
+    set_ticks(36000)
+    for x = o.x - 6, o.x + 6, 2 do
+      t.surface.create_entity { name = "straight-rail", position = { x = x, y = o.y },
+        direction = defines.direction.east, force = "player" }
+    end
+    t.wagon = t.surface.create_entity { name = "fluid-wagon", position = { x = o.x, y = o.y },
+      direction = defines.direction.east, force = "player" }
+    t.pump = t.world.place(t.surface, "pump", { x = o.x, y = o.y + 2 },
+                           { direction = defines.direction.north })
+    pcall(function() t.wagon.insert_fluid { name = "water", amount = 100 } end)
+    -- Force-infect the WAGON through the live mod (rolling stock may not infect from
+    -- a bite); this still exercises the real spread sweep, which is the point.
+    if t.wagon then remote.call(DEBUG, "infect", t.wagon) end
+  end,
+  { after = 3, fn = function(t)
+    t.assert.not_nil(t.pump, "pump placed beside the rail")
+    t.assert.is_true(t.wagon.valid and is_infected(t.wagon), "wagon is infected at t0")
+  end },
+  { after = 150, fn = function(t)
+    t.assert.is_true(t.pump.valid and is_infected(t.pump),
+      "an infected fluid wagon infected the pump servicing its rail")
+  end },
+})

@@ -139,7 +139,10 @@ local function on_infected(entity)
   if BELT_TYPE_SET[entity.type] then
     if c.belts[un] then return end  -- already pending
     c.belts[un] = { entity = entity, spread_at = game.tick + belt_delay(entity) }
-  elseif has_fluidbox(entity) then
+  elseif has_fluidbox(entity) or entity.type == "fluid-wagon" then
+    -- A fluid wagon has no queryable fluidbox topology (has_fluidbox is false), but
+    -- an infected wagon must still spread to the pump docked at it — so route it into
+    -- the pipe frontier explicitly; spread_pipe_all has a wagon branch (wagon -> pump).
     if c.pipes[un] then return end
     c.pipes[un] = { entity = entity, spread_at = game.tick + PIPE_DELAY }
   end
@@ -344,7 +347,23 @@ end
 --- belt_has_items.) get_fluid_count() with no name returns the total across the
 --- entity's fluidboxes.
 local function pipe_has_fluid(pipe)
-  return (pipe.get_fluid_count and pipe.get_fluid_count() or 0) > 0
+  -- pcall-guarded: a fluid wagon may not expose get_fluid_count; if we can't measure
+  -- presence, don't gate it out (treat as carrying), so wagon -> pump spread proceeds.
+  local ok, n = pcall(function() return pipe.get_fluid_count() end)
+  if not ok then return true end
+  return (n or 0) > 0
+end
+
+--- Is `pos` inside `box` (a LuaEntity bounding_box), allowing `margin` tiles of slack?
+--- Used to confirm a pump's serviced rail sits under a fluid wagon.
+local function point_in_box(pos, box, margin)
+  margin = margin or 0
+  local lt = box.left_top or box[1]
+  local rb = box.right_bottom or box[2]
+  local lx, ly = lt.x or lt[1], lt.y or lt[2]
+  local rx, ry = rb.x or rb[1], rb.y or rb[2]
+  return pos.x >= lx - margin and pos.x <= rx + margin
+     and pos.y >= ly - margin and pos.y <= ry + margin
 end
 
 --- Infect every fluid-connected neighbour of `conduit`, in ALL directions (a fluid
@@ -401,6 +420,35 @@ local function spread_pipe_all(conduit)
             end
           end
         end
+      end
+    end
+  end
+
+  -- The REVERSE of the pump branch: an infected fluid WAGON infects the pump(s)
+  -- docked at it (and the pump then spreads to its pipe). Same non-fluidbox link,
+  -- read the other way: a pump services the wagon iff one of its rail targets sits
+  -- under the wagon. Search pumps near the wagon, then confirm via the rail target.
+  if conduit.type == "fluid-wagon" then
+    local box = conduit.bounding_box
+    local area = {
+      { box.left_top.x - 2, box.left_top.y - 2 },
+      { box.right_bottom.x + 2, box.right_bottom.y + 2 },
+    }
+    local pumps = conduit.surface.find_entities_filtered { type = "pump", area = area }
+    for _, pump in pairs(pumps) do
+      if pump.valid then
+        local services = false
+        for _, prop in ipairs({ "pump_input_rail_targets", "pump_output_rail_targets" }) do
+          local ok, rails = pcall(function() return pump[prop] end)
+          if ok and type(rails) == "table" then
+            for _, rail in pairs(rails) do
+              if rail and rail.valid and point_in_box(rail.position, box, 1) then
+                services = true
+              end
+            end
+          end
+        end
+        if services then infection.infect(pump) end
       end
     end
   end

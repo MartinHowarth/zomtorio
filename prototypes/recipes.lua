@@ -39,6 +39,9 @@ kiln.fluid_boxes_off_when_no_fluid_recipe = nil
 -- The kiln needs no electricity: a void energy source runs it for free (thematically
 -- the burned corpses are the fuel — baked into the lossy 5->2 recipe, R-CORPSE-7).
 kiln.energy_source = { type = "void" }
+-- No module slots: the kiln is a fixed lossy converter, not a tunable machine.
+kiln.module_slots = 0
+kiln.module_specification = nil
 
 -- Make it LOOK like a stone furnace (a "corpse kiln") with a small biter lurking in
 -- the bottom-right corner, while remaining an assembling-machine mechanically. Use
@@ -120,7 +123,7 @@ data:extend({
 -- electricity. Unlike the corpse-kiln (an assembling-machine that needs its recipe
 -- set), the pyre is a FURNACE, which auto-selects its recipe from whatever ingredient
 -- is inserted — so a single inserter dropping corpses in just burns them. The burn
--- recipe produces NOTHING (the corpse is destroyed); the 5s craft time = 1 corpse / 5s.
+-- recipe produces NOTHING (the corpse is destroyed); the 3s craft time = 1 corpse / 3s.
 -- energy_source = void (like the kiln) means it runs with no power, "ever-burning".
 
 data:extend({
@@ -138,11 +141,22 @@ pyre.placeable_by = { item = "zomtorio-zombie-pyre", count = 1 }
 -- No electricity: void energy makes it run for free (the corpses are the "fuel").
 pyre.energy_source = { type = "void" }
 pyre.energy_usage = "1kW"
--- 4x4 footprint.
-pyre.collision_box = { { -1.9, -1.9 }, { 1.9, 1.9 } }
-pyre.selection_box = { { -2, -2 }, { 2, 2 } }
-pyre.tile_width = 4
-pyre.tile_height = 4
+-- 3x3 footprint.
+pyre.collision_box = { { -1.4, -1.4 }, { 1.4, 1.4 } }
+pyre.selection_box = { { -1.5, -1.5 }, { 1.5, 1.5 } }
+pyre.tile_width = 3
+pyre.tile_height = 3
+-- When destroyed, leave a WOODEN-CRATE wreck, not the stone-furnace remnants the
+-- clone inherited.
+pyre.corpse = "wooden-chest-remnants"
+pyre.dying_explosion = nil
+-- Reconstruct/ghost/alert icon = the crate+fire item icon (set below), not the
+-- inherited stone-furnace icon.
+pyre.icon = nil
+pyre.icons = {
+  { icon = "__base__/graphics/icons/wooden-chest.png", icon_size = 64 },
+  { icon = "__zomtorio__/graphics/flame.png", icon_size = 128, scale = 0.22, shift = { 0, -7 } },
+}
 -- One corpse slot in, nothing out (the burn recipe yields nothing).
 pyre.source_inventory_size = 1
 pyre.result_inventory_size = 0
@@ -155,7 +169,9 @@ pyre.graphics_set = {
     layers = {
       {
         filename = "__base__/graphics/entity/wooden-chest/wooden-chest.png",
-        width = 62, height = 72, scale = 3.0, shift = { 0, 0.1 },
+        -- ~70% of the 3x3 footprint. The chest fills ~1 tile at scale 0.5, so tiles
+        -- ~= scale x 2; 0.7 x 3 = 2.1 tiles -> scale ~1.05.
+        width = 62, height = 72, scale = 1.05, shift = { 0, 0.1 },
         -- A static layer must match the fire layer's frame count (all layers of one
         -- animation share frame count): repeat the single chest frame to fill 90.
         frame_count = 1, repeat_count = 90,
@@ -183,8 +199,10 @@ data:extend({
   {
     type = "item",
     name = "zomtorio-zombie-pyre",
+    -- A crate with a flame on top (matches the building).
     icons = {
       { icon = "__base__/graphics/icons/wooden-chest.png", icon_size = 64 },
+      { icon = "__zomtorio__/graphics/flame.png", icon_size = 128, scale = 0.22, shift = { 0, -7 } },
     },
     subgroup = "production-machine",
     order = "z-zomtorio-zombie-pyre",
@@ -201,13 +219,13 @@ data:extend({
     results = { { type = "item", name = "zomtorio-zombie-pyre", amount = 1 } },
   },
   -- The burn recipe the furnace auto-selects from an inserted corpse: 1 corpse in,
-  -- NOTHING out, 5s -> exactly 1 corpse incinerated every 5 seconds.
+  -- NOTHING out, 3s -> exactly 1 corpse incinerated every 3 seconds.
   {
     type = "recipe",
     name = "zomtorio-burn-corpse",
     categories = { "zomtorio-pyre-burning" },
     enabled = true,
-    energy_required = 5,
+    energy_required = 3,
     ingredients = { { type = "item", name = "zomtorio-corpse", amount = 1 } },
     results = {},
     -- Empty results => no product to derive an icon from, so the recipe needs an

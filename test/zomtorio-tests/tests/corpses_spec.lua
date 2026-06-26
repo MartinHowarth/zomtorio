@@ -410,7 +410,7 @@ end)
 
 -- ------------------------------------------------- zombie pyre (corpse incinerator)
 -- PURPOSE: defends that the zombie pyre actually DESTROYS inserted corpses over time
--- (~1 every 5s) with NO electricity (void energy). If the furnace type / burn recipe /
+-- (~1 every 3s) with NO electricity (void energy). If the furnace type / burn recipe /
 -- void-energy wiring regresses, corpses would pile up in it instead of being safely
 -- disposed of (the no-reanimation alternative to kiln-drying).
 T.test("the zombie pyre incinerates inserted corpses over time (no power)", {
@@ -422,10 +422,29 @@ T.test("the zombie pyre incinerates inserted corpses over time (no power)", {
     t.pyre.insert { name = CORPSE_ITEM, count = 2 }
     t.assert.equal(2, t.pyre.get_item_count(CORPSE_ITEM), "2 corpses loaded into the pyre")
   end,
-  -- 2 corpses x 5s = ~600 ticks; wait comfortably past so both finish burning.
+  -- 2 corpses x 3s = ~360 ticks; wait comfortably past so both finish burning.
   { after = 900, fn = function(t)
     t.assert.is_true(t.pyre.valid, "pyre still standing")
     t.assert.equal(0, t.pyre.get_item_count(CORPSE_ITEM),
       "both corpses were incinerated (burned away, not piled up)")
   end },
 })
+
+-- PURPOSE: lock the pyre/kiln prototype tweaks the player asked for, so they can't
+-- silently regress: pyre burns 1 corpse / 3s (recipe energy_required = 3), is a 3x3
+-- building, and the kiln has NO module slots. (The crate+fire icon and the
+-- wooden-crate destroyed wreck are visual/GUI-verify, not asserted here.)
+T.test("pyre burn rate / size and kiln module slots match spec", function(t)
+  local burn = prototypes.recipe["zomtorio-burn-corpse"]
+  t.assert.not_nil(burn, "burn-corpse recipe exists")
+  t.assert.equal(3, burn.energy, "burn recipe takes 3s (1 corpse / 3s)")
+
+  local pyre = prototypes.entity["zomtorio-zombie-pyre"]
+  t.assert.not_nil(pyre, "pyre entity exists")
+  t.assert.equal(3, pyre.tile_width, "pyre is 3 tiles wide")
+  t.assert.equal(3, pyre.tile_height, "pyre is 3 tiles tall")
+
+  local kiln = prototypes.entity["zomtorio-corpse-kiln"]
+  t.assert.not_nil(kiln, "kiln entity exists")
+  t.assert.equal(0, kiln.module_inventory_size or 0, "kiln has no module slots")
+end)

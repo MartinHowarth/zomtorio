@@ -1,29 +1,36 @@
 ---------------------------------------------------------------------------------------------------
 Version: 2.0.0
-Date: 2026-06-25
+Date: 2026-06-26
   Major Features:
     - Complete rewrite for Factorio 2.1 + Space Age. Biters become an overwhelming zombie horde:
-      far more numerous, individually weak, and represented by cheap "horde unit" clusters so huge
-      numbers don't cost UPS.
+      far more numerous, individually weak, and represented by cheap "swarm" clusters (one entity
+      standing in for many zombies) so huge numbers don't cost UPS.
     - Buildings destroyed by the horde spawn zombies equal to their total raw resource cost.
-    - Infection: a hit from the horde infects buildings, robots, belts and inserters with damage
-      over time; it spreads through the factory along the flow of goods (inserters, loaders, drills,
-      belts). Full repair cures it. The player is infected by bites (shields protect) and cured by
-      any net heal.
-    - Corpse reanimation via the Space Age spoilage system: killed zombies drop burnable corpses
-      that hatch into new zombies wherever they sit unless burned or kiln-dried first.
-    - Telegraphed, evolution-scaling swarm events that strike at night, on top of pollution-driven
-      attacks.
+    - Infection and contagion: a hit from the horde infects buildings, robots, belts, inserters and
+      pipes with damage over time, and it spreads downstream through the factory along the flow of
+      goods - movers (inserters, loaders, drills) when actively transferring, belts while items ride
+      them, and fluids through pipes, tanks, pumps and fluid wagons. Full repair cures it. The player
+      is infected only by an actual bite (and only if it gets through shields); any net heal cures.
+    - Corpse reanimation via the Space Age spoilage system: killed zombies drop burnable corpses that
+      hatch wherever they sit. Reanimation is bounded to one generation - a corpse hatches into a
+      "shambler" that drops no corpse, so the chain ends.
+    - Telegraphed, evolution-scaling horde events that strike at night, on top of pollution-driven
+      attacks. A horde advances as a cohesive wall from one direction and targets your factory.
   Features:
+    - Spitter swarms: engine-spawned spitters form their own violet swarm clusters alongside biters.
+    - Corpse disposal: the zombie pyre (no power, burns inserted corpses) and the corpse kiln (dries
+      corpses into a non-spoiling, storable fuel at a deliberate loss).
     - Melee technologies: Tier 1 unlocks swarm multi-kill, Tier 2 strengthens it and unlocks the
-      Double Tap toggle (clean, corpse-free kills).
-    - Zombies move faster at night (configurable).
-    - Denser, more aggressive nests and base expansion; pollution recruits far more attackers.
-    - Oil in a building's cost spawns tougher zombie variants on its death.
-    - Extensive configuration: horde size, active-zombie cap, infection on/off and time-to-death,
-      player infection, night speedup, corpse reanimation on/off and timer, pollution cost per
-      zombie, nest spawn rate, base expansion rate, night assault escalation, and swarm-event
-      on/off, intensity and frequency.
+      Double Tap toggle (clean, corpse-free kills) - on by default once researched.
+    - Zombies (individuals and swarms) move faster at night (configurable).
+    - Denser, more aggressive nests and base expansion; pollution recruits far more attackers; engine
+      nest output folds into local swarms once the active-zombie cap is full.
+    - Console command /zomtorio-horde [minutes] to trigger a horde on demand.
+    - Extensive configuration: horde size, active-zombie cap, building infection on/off and
+      time-to-death, post-repair immunity window, player infection, night speedup, corpse
+      reanimation on/off and timer, bot corpse collection, pollution cost per zombie, nest spawn
+      rate, base expansion rate, night assault escalation, and horde-event on/off, intensity and
+      frequency.
   Info:
     - Requires the Space Age expansion. v1 acts on Nauvis only; other planets are unaffected.
 ---------------------------------------------------------------------------------------------------

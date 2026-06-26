@@ -88,10 +88,12 @@ always stay dead.
 | Active zombie cap | 1000 | Max individual zombies; overflow becomes clusters (CPU tuning). |
 | Building infection | on | Buildings hit by the horde become infected. |
 | Infection time-to-death | 300 s | Time for an infected building (full health) to die (30 s–10 min). |
+| Post-repair immunity | 15 s | After a cure, how long an entity resists re-infection (0 disables). |
 | Player infection | on | Bites infect you; healing cures it. |
 | Night speedup | +100% | How much faster zombies move at night (startup). |
 | Corpse reanimation | on | Corpses spoil into zombies (startup). |
 | Reanimation time | 10 min | How long a corpse takes to reanimate (startup). |
+| Bot corpse collection | on | Construction bots mark dropped corpses for collection. |
 | Pollution cost per zombie | 0.05× | Lower = pollution recruits far more attackers (startup). |
 | Nest spawn rate | 2.0× | How much faster nests produce enemies (startup). |
 | Base expansion rate | 2.0× | How aggressively bases expand. |

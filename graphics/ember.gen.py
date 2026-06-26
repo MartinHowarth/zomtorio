@@ -60,10 +60,10 @@ def main():
                 c = (int(lerp(GLOW[0], HOT[0], t)),
                      int(lerp(GLOW[1], HOT[1], t)),
                      int(lerp(GLOW[2], HOT[2], t)))
-            # Partly opaque: glowing bits read stronger; everything fades out at the
-            # rim so it blends onto the crate with no hard square/circle edge.
-            edge = 1.0 - (d ** 2)
-            alpha = int(max(0, min(255, (110 + heat * 130) * edge)))
+            # Mostly opaque: the interior stays solid (so the embers read strongly on
+            # the crate) and only the rim fades, so there's no hard edge.
+            edge = max(0.0, 1.0 - (d ** 3))
+            alpha = int(max(0, min(255, (200 + heat * 55) * edge)))
             put(x, y, (c[0], c[1], c[2], alpha))
 
     raw = bytearray()

@@ -175,10 +175,10 @@ pyre.graphics_set = {
         width = 62, height = 72, scale = 1.05, shift = { 0, 0.1 },
       },
       {
-        -- static, partly-opaque molten embers sitting in the crate's mouth (alpha is
+        -- static, mostly-opaque molten embers filling the crate's mouth (alpha is
         -- baked into the PNG by graphics/ember.gen.py). Always drawn.
         filename = "__zomtorio__/graphics/ember.png",
-        width = 128, height = 128, scale = 0.6, shift = { 0, -0.15 },
+        width = 128, height = 128, scale = 0.9, shift = { 0, -0.1 },
       },
     },
   },
